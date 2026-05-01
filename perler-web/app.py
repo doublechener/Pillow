@@ -9,9 +9,10 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from palette import MARD_PALETTE, BEAD_INVENTORY
+import db
 
 # ============================================================
-# 页面配置 111
+# 页面配置
 # ============================================================
 st.set_page_config(
     page_title="拼豆图纸生成器",
@@ -139,10 +140,11 @@ def pil_to_bytes(img: Image.Image) -> bytes:
 
 
 # ============================================================
-# 库存状态(用 session_state 保存可编辑的库存)
+# 库存初始化(SQLite + JSON 持久化,详见 db.py)
+# - 首次启动 inventory.db 不存在 → 优先从 inventory.json 水合
+# - JSON 也不存在 → 从 BEAD_INVENTORY 出厂值水合,并自动生成 inventory.json
 # ============================================================
-if "inventory" not in st.session_state:
-    st.session_state.inventory = dict(BEAD_INVENTORY)
+db.init_db(default_inventory=BEAD_INVENTORY)
 
 # ============================================================
 # 侧边栏:参数
@@ -180,7 +182,7 @@ with tab_gen:
             st.image(src, use_container_width=True)
 
         if st.button("🚀 生成拼豆图纸", type="primary", use_container_width=True):
-            inv = st.session_state.inventory if check_inventory else None
+            inv = db.load_inventory() if check_inventory else None
             palette = MARD_PALETTE
             if only_in_stock and inv:
                 palette = {k: v for k, v in palette.items() if inv.get(k, 0) > 0}
@@ -212,9 +214,10 @@ with tab_gen:
 
             rows = []
             shortage = 0
+            inv_now = db.load_inventory() if check_inventory else {}
             for name, count in bead_count.most_common():
-                stock = st.session_state.inventory.get(name, 0)
                 if check_inventory:
+                    stock = inv_now.get(name, 0)
                     diff = stock - count
                     status = "✅ 充足" if diff >= 0 else f"❌ 缺{-diff}"
                     if diff < 0:
@@ -257,7 +260,7 @@ with tab_gen:
     else:
         st.info("👈 在上方上传一张图片开始")
 
-# ---------- Tab 2: 编辑库存(优化版) ----------
+# ---------- Tab 2: 编辑库存(SQLite 持久化) ----------
 def _color_swatch_data_url(rgb, size=32):
     """生成色块的 data URL,用于 ImageColumn 显示真实颜色"""
     img = Image.new("RGB", (size, size), tuple(rgb))
@@ -273,7 +276,9 @@ SERIES_LABELS = {
 }
 
 with tab_inv:
-    inv = st.session_state.inventory
+    # 每次 rerun 都从 SQLite 读最新数据(单一数据源)
+    inv = db.load_inventory()
+    last_ts = db.last_updated()
 
     # ---- 顶部指标卡 ----
     total_colors = len(inv)
@@ -289,6 +294,8 @@ with tab_inv:
               delta=None if oos_colors == 0 else f"-{oos_colors}",
               delta_color="inverse")
     m4.metric("📦 库存总颗数", f"{total_beads:,}")
+    if last_ts:
+        st.caption(f"🕒 数据库最近更新: {last_ts}")
 
     st.divider()
 
@@ -333,7 +340,7 @@ with tab_inv:
         st.info("当前筛选条件下没有色号,试试放宽筛选。")
         edited = df
     else:
-        st.caption(f"当前显示 {len(df)} 个色号 · 双击「库存」单元格直接修改")
+        st.caption(f"当前显示 {len(df)} 个色号 · 双击「库存」单元格修改,然后点下方「保存修改」写入数据库")
         edited = st.data_editor(
             df,
             use_container_width=True,
@@ -346,7 +353,7 @@ with tab_inv:
                 "RGB": st.column_config.TextColumn("RGB"),
                 "库存": st.column_config.NumberColumn(
                     "库存 (颗)", min_value=0, step=1, format="%d",
-                    help="双击修改数量,点下方「保存修改」应用",
+                    help="双击修改数量,点下方「保存修改」写入 SQLite",
                 ),
                 "状态": st.column_config.TextColumn("状态", width="small"),
             },
@@ -360,15 +367,19 @@ with tab_inv:
     b1, b2, b3 = st.columns(3)
     if b1.button("💾 保存修改", type="primary", use_container_width=True):
         if not df.empty:
-            for _, row in edited.iterrows():
-                code = row["色号"]
-                if code in st.session_state.inventory:
-                    st.session_state.inventory[code] = int(row["库存"] or 0)
-            st.success(f"✅ 已更新 {len(edited)} 个色号的库存")
+            updates = {
+                row["色号"]: int(row["库存"] or 0)
+                for _, row in edited.iterrows()
+            }
+            db.save_inventory(updates)
+            st.success(
+                f"✅ 已写入 SQLite 数据库,并自动同步到 inventory.json"
+                f"(更新 {len(updates)} 个色号)"
+            )
             st.rerun()
 
     full_csv = pd.DataFrame(
-        [{"色号": k, "库存": v} for k, v in st.session_state.inventory.items()]
+        [{"色号": k, "库存": v} for k, v in inv.items()]
     ).to_csv(index=False).encode("utf-8-sig")
     b2.download_button(
         "⬇️ 导出全部 CSV",
@@ -379,22 +390,40 @@ with tab_inv:
     )
 
     upload_csv = b3.file_uploader(
-        "📤 导入 CSV", type="csv", label_visibility="collapsed",
+        "📤 导入 CSV(覆盖整个库存)", type="csv",
+        label_visibility="collapsed",
     )
     if upload_csv:
         new_df = pd.read_csv(upload_csv)
-        st.session_state.inventory = {
+        new_inv = {
             row["色号"]: int(row["库存"] or 0)
             for _, row in new_df.iterrows()
             if pd.notna(row.get("色号"))
         }
-        st.success(f"已从 CSV 导入 {len(new_df)} 条库存")
+        db.replace_all(new_inv)
+        st.success(f"✅ 已从 CSV 导入 {len(new_inv)} 条库存,数据库已更新")
         st.rerun()
+
+    # ---- 同步到云端 ----
+    with st.expander("☁️ 同步到 Streamlit Cloud(推送 inventory.json)", expanded=False):
+        st.markdown(
+            "本地修改会自动写入两个文件:\n\n"
+            "- `inventory.db` — SQLite 数据库(本地用,不进 Git)\n"
+            "- `inventory.json` — 文本备份(**这个要提交**,云端数据源)\n\n"
+            "**让 Streamlit Cloud 上的访客看到最新数据,只需 push `inventory.json`:**"
+        )
+        st.code(
+            "git add inventory.json\n"
+            "git commit -m \"update: 库存数据\"\n"
+            "git push",
+            language="powershell",
+        )
+        st.caption("推送后 Streamlit Cloud 会在约 30 秒内自动重新部署。")
 
     # ---- 各系列概览 ----
     with st.expander("📊 各系列库存概览", expanded=False):
         series_stats = {}
-        for code, stock in st.session_state.inventory.items():
+        for code, stock in inv.items():
             s = code[0]
             stat = series_stats.setdefault(
                 s, {"色号数": 0, "有库存": 0, "总颗数": 0}
