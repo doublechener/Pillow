@@ -205,9 +205,9 @@ with tab_gen:
         src = Image.open(uploaded)
         with col_l:
             st.subheader("原图预览")
-            st.image(src, use_container_width=True)
+            st.image(src, width="stretch")
 
-        if st.button("🚀 生成拼豆图纸", type="primary", use_container_width=True):
+        if st.button("🚀 生成拼豆图纸", type="primary", width="stretch"):
             inv = db.load_inventory() if check_inventory else None
             palette = MARD_PALETTE
             if only_in_stock and inv:
@@ -226,13 +226,13 @@ with tab_gen:
 
             with col_r:
                 st.subheader("拼豆图纸")
-                st.image(pattern_img, use_container_width=True)
+                st.image(pattern_img, width="stretch")
                 st.download_button(
                     "⬇️ 下载图纸 PNG",
                     pil_to_bytes(pattern_img),
                     file_name="perler_pattern.png",
                     mime="image/png",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
             st.divider()
@@ -262,7 +262,7 @@ with tab_gen:
                           delta=None if shortage == 0 else f"-{shortage}",
                           delta_color="inverse")
 
-            st.dataframe(df_use, use_container_width=True, hide_index=True)
+            st.dataframe(df_use, width="stretch", hide_index=True)
 
             st.subheader("🏷️ 颜色图例")
             st.image(legend_img)
@@ -276,7 +276,7 @@ with tab_gen:
             if check_inventory and shortage > 0:
                 st.warning(f"🛒 共 {shortage} 种颜色需要补货")
                 shortage_df = df_use[df_use["状态"].str.startswith("❌")]
-                st.dataframe(shortage_df, use_container_width=True, hide_index=True)
+                st.dataframe(shortage_df, width="stretch", hide_index=True)
                 st.download_button(
                     "⬇️ 下载补货清单 CSV",
                     shortage_df.to_csv(index=False).encode("utf-8-sig"),
@@ -369,7 +369,7 @@ with tab_inv:
         st.caption(f"当前显示 {len(df)} 个色号 · 双击「库存」单元格修改,然后点下方「保存修改」写入数据库")
         edited = st.data_editor(
             df,
-            use_container_width=True,
+            width="stretch",
             height=520,
             hide_index=True,
             column_config={
@@ -391,7 +391,7 @@ with tab_inv:
 
     # ---- 操作按钮 ----
     b1, b2, b3 = st.columns(3)
-    if b1.button("💾 保存修改", type="primary", use_container_width=True):
+    if b1.button("💾 保存修改", type="primary", width="stretch"):
         if not df.empty:
             updates = {
                 row["色号"]: int(row["库存"] or 0)
@@ -412,7 +412,7 @@ with tab_inv:
         full_csv,
         file_name="inventory.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
 
     upload_csv = b3.file_uploader(
@@ -467,7 +467,7 @@ with tab_inv:
             for s, v in sorted(series_stats.items())
         ])
         st.dataframe(
-            series_df, use_container_width=True, hide_index=True,
+            series_df, width="stretch", hide_index=True,
             column_config={
                 "总颗数": st.column_config.NumberColumn("总颗数", format="%d"),
             },
@@ -529,15 +529,15 @@ with tab_recognize:
 
             cp1, cp2 = st.columns(2)
             cp1.image(ocr_img, caption=f"原图 {Wo}×{Ho}",
-                      use_container_width=True)
+                      width="stretch")
             cp2.image(
                 legend_img,
                 caption=f"OCR 区域 {legend_arr.shape[1]}×{legend_arr.shape[0]}",
-                use_container_width=True,
+                width="stretch",
             )
 
             if st.button("🔬 开始 OCR 识别", type="primary",
-                         use_container_width=True, key="ocr_run"):
+                         width="stretch", key="ocr_run"):
                 engine, ocr_err = _get_ocr_engine()
                 if engine is None:
                     st.error(
@@ -623,7 +623,7 @@ with tab_recognize:
                     delta_color="inverse",
                 )
 
-                st.dataframe(ocr_df, use_container_width=True, hide_index=True)
+                st.dataframe(ocr_df, width="stretch", hide_index=True)
 
                 if unknown:
                     st.warning(
@@ -638,10 +638,10 @@ with tab_recognize:
                     ocr_df.to_csv(index=False).encode("utf-8-sig"),
                     file_name="ocr_recognized.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
                 if d2.button("➖ 从库存中扣减", type="primary",
-                             use_container_width=True, key="ocr_deduct"):
+                             width="stretch", key="ocr_deduct"):
                     updates = {}
                     for code, need in items:
                         updates[code] = max(0, inv_now.get(code, 0) - need)
@@ -653,7 +653,7 @@ with tab_recognize:
                     st.session_state.pop("ocr_raw_lines", None)
                     st.session_state.pop("ocr_unknown", None)
                     st.rerun()
-                if d3.button("🗑️ 清空", use_container_width=True,
+                if d3.button("🗑️ 清空", width="stretch",
                              key="ocr_clear"):
                     st.session_state.pop("ocr_parsed", None)
                     st.session_state.pop("ocr_raw_lines", None)
@@ -703,15 +703,15 @@ with tab_recognize:
 
             pcol1, pcol2 = st.columns(2)
             pcol1.image(rec_img, caption=f"原图 {W}×{H}",
-                        use_container_width=True)
+                        width="stretch")
             pcol2.image(
                 cropped_preview,
                 caption=f"裁剪后 {arr.shape[1]}×{arr.shape[0]}",
-                use_container_width=True,
+                width="stretch",
             )
 
             if st.button("🔬 开始识别", type="primary",
-                         use_container_width=True, key="rec_run"):
+                         width="stretch", key="rec_run"):
                 HH, WW = arr.shape[:2]
                 cw = WW / rec_w
                 ch = HH / rec_h
@@ -822,7 +822,7 @@ with tab_recognize:
                 delta_color="inverse",
             )
 
-            st.dataframe(rec_df, use_container_width=True, hide_index=True)
+            st.dataframe(rec_df, width="stretch", hide_index=True)
 
             d1, d2, d3 = st.columns(3)
             d1.download_button(
@@ -830,10 +830,10 @@ with tab_recognize:
                 rec_df.to_csv(index=False).encode("utf-8-sig"),
                 file_name="recognized_usage.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
             if d2.button("➖ 从库存中扣减", type="primary",
-                         use_container_width=True, key="rec_deduct"):
+                         width="stretch", key="rec_deduct"):
                 updates = {}
                 for code, need in items:
                     updates[code] = max(0, inv_now.get(code, 0) - need)
@@ -845,7 +845,7 @@ with tab_recognize:
                 st.session_state.pop("rec_counter", None)
                 st.session_state.pop("rec_preview_bytes", None)
                 st.rerun()
-            if d3.button("🗑️ 清空识别结果", use_container_width=True,
+            if d3.button("🗑️ 清空识别结果", width="stretch",
                          key="rec_clear"):
                 st.session_state.pop("rec_counter", None)
                 st.session_state.pop("rec_preview_bytes", None)
