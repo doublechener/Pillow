@@ -499,11 +499,13 @@ with tab_recognize:
 
         @st.cache_resource(show_spinner="正在加载 OCR 模型(首次约 10 秒)…")
         def _get_ocr_engine():
+            """返回 (engine, error_message)。失败时 engine=None,error_message 含真实 traceback。"""
             try:
                 from rapidocr_onnxruntime import RapidOCR
-                return RapidOCR()
-            except ImportError:
-                return None
+                return RapidOCR(), None
+            except Exception as e:
+                import traceback
+                return None, f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
 
         ocr_file = st.file_uploader(
             "上传带图例的拼豆图",
@@ -536,11 +538,16 @@ with tab_recognize:
 
             if st.button("🔬 开始 OCR 识别", type="primary",
                          use_container_width=True, key="ocr_run"):
-                engine = _get_ocr_engine()
+                engine, ocr_err = _get_ocr_engine()
                 if engine is None:
                     st.error(
-                        "未安装 rapidocr-onnxruntime。请在 requirements.txt "
-                        "加上 `rapidocr-onnxruntime>=1.3` 后重启 / 重新部署。"
+                        "❌ OCR 引擎加载失败。常见原因:\n\n"
+                        "1. **Python 版本**:`rapidocr-onnxruntime` 要求 Python <3.13。"
+                        "在 Streamlit Cloud → Settings → Advanced settings 把 Python 改成 3.12。\n\n"
+                        "2. **缺系统库 libGL.so.1**:在 `perler-web/packages.txt` 加 `libgl1`、"
+                        "`libglib2.0-0`,push 后 Cloud 会自动 apt 安装。\n\n"
+                        "3. **包没装**:确认 `requirements.txt` 含 `rapidocr-onnxruntime>=1.3,<1.5`。\n\n"
+                        f"**真实错误 traceback**:\n```\n{ocr_err}\n```"
                     )
                 else:
                     with st.spinner("OCR 中…"):
