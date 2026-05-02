@@ -75,6 +75,37 @@ h1, h2, h3 {
 	font-weight: 700;
 }
 
+/* 分段控件(顶栏页面导航):糖果渐变高亮、告别红点 */
+[data-testid="stSegmentedControl"] {
+	display: flex; justify-content: center;
+	background: rgba(255,255,255,.5);
+	backdrop-filter: blur(10px);
+	padding: 6px; border-radius: 16px;
+	border: 1px solid rgba(255,182,217,.3);
+	margin: 6px 0 4px;
+}
+[data-testid="stSegmentedControl"] [role="radiogroup"] { gap: 6px; }
+[data-testid="stSegmentedControl"] label {
+	border-radius: 12px !important;
+	padding: 8px 18px !important;
+	font-weight: 600 !important;
+	color: #7A7A9A !important;
+	background: transparent !important;
+	border: none !important;
+	transition: all .25s cubic-bezier(.4,0,.2,1) !important;
+}
+[data-testid="stSegmentedControl"] label:hover {
+	background: rgba(255,182,217,.18) !important;
+	color: #FF6B9D !important;
+	transform: translateY(-1px);
+}
+[data-testid="stSegmentedControl"] label:has(input:checked) {
+	background: linear-gradient(135deg, #FFB6D9 0%, #A8DAFF 100%) !important;
+	color: white !important;
+	box-shadow: 0 4px 12px rgba(255,182,217,.4) !important;
+}
+[data-testid="stSegmentedControl"] label input { display: none !important; }
+
 /* Tab 美化 + 切换淡入 */
 .stTabs [data-baseweb="tab-list"] {
 	gap: 8px;
@@ -265,6 +296,47 @@ h1, h2, h3 {
 	100% { transform: translateY(105vh) rotate(720deg); opacity: 0; }
 }
 
+/* 像素风空闲面板(侧边栏无参数页面用) */
+.pixel-idle {
+	display: flex; flex-direction: column; align-items: center;
+	gap: 14px; padding: 22px 10px;
+	background: rgba(255,255,255,.55);
+	border: 1px dashed rgba(255,182,217,.45);
+	border-radius: 16px; backdrop-filter: blur(6px);
+}
+.pixel-grid {
+	display: grid; grid-template-columns: repeat(4, 14px); gap: 4px;
+}
+.pixel-grid span {
+	width: 14px; height: 14px; border-radius: 4px;
+	box-shadow: inset 0 -2px 0 rgba(0,0,0,.08);
+	animation: pixelPulse 2.4s ease-in-out infinite;
+}
+.pixel-grid span:nth-child(1)  { background:#FFB6D9; animation-delay: 0.00s; }
+.pixel-grid span:nth-child(2)  { background:#FFE9A8; animation-delay: 0.15s; }
+.pixel-grid span:nth-child(3)  { background:#A8DAFF; animation-delay: 0.30s; }
+.pixel-grid span:nth-child(4)  { background:#D4C5FF; animation-delay: 0.45s; }
+.pixel-grid span:nth-child(5)  { background:#B8E6C0; animation-delay: 0.60s; }
+.pixel-grid span:nth-child(6)  { background:#FFCBA4; animation-delay: 0.75s; }
+.pixel-grid span:nth-child(7)  { background:#FF8FB8; animation-delay: 0.90s; }
+.pixel-grid span:nth-child(8)  { background:#7AB8E0; animation-delay: 1.05s; }
+.pixel-grid span:nth-child(9)  { background:#D4C5FF; animation-delay: 1.20s; }
+.pixel-grid span:nth-child(10) { background:#B8E6C0; animation-delay: 1.35s; }
+.pixel-grid span:nth-child(11) { background:#FFE9A8; animation-delay: 1.50s; }
+.pixel-grid span:nth-child(12) { background:#FFB6D9; animation-delay: 1.65s; }
+.pixel-grid span:nth-child(13) { background:#A8DAFF; animation-delay: 1.80s; }
+.pixel-grid span:nth-child(14) { background:#FFCBA4; animation-delay: 1.95s; }
+.pixel-grid span:nth-child(15) { background:#FF8FB8; animation-delay: 2.10s; }
+.pixel-grid span:nth-child(16) { background:#7AB8E0; animation-delay: 2.25s; }
+@keyframes pixelPulse {
+	0%,100% { transform: scale(.7); opacity: .55; }
+	50%     { transform: scale(1);  opacity: 1; }
+}
+.pixel-idle-text {
+	color:#7A7A9A; font-size:12px; font-weight:600;
+	text-align:center; line-height:1.5; white-space: pre-line;
+}
+
 /* 隐藏 Streamlit 默认菜单和页脚 */
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
@@ -297,6 +369,24 @@ def bead_loader_html(text: str = "拼豆中…") -> str:
 	        f'</div>'
 	        f'<span style="color:#7A7A9A;font-weight:600;">{text}</span>'
 	        f'</div>')
+
+
+def render_idle_pixel(text: str = "歇会儿,像素豆豆陪你 ✿") -> None:
+	"""侧边栏空闲面板:像素吉祥物 + 4×4 拼豆色块脉冲动画。
+
+	用于不需要参数的页面(库存/识别/历史/色板),代替堆一坨
+	用不到的控件,留出呼吸感。
+	"""
+	st.markdown(f'''<div class="pixel-idle">
+<div class="mascot-bounce">{mascot_html(56)}</div>
+<div class="pixel-grid">
+<span></span><span></span><span></span><span></span>
+<span></span><span></span><span></span><span></span>
+<span></span><span></span><span></span><span></span>
+<span></span><span></span><span></span><span></span>
+</div>
+<div class="pixel-idle-text">{text}</div>
+</div>''', unsafe_allow_html=True)
 
 
 def celebrate(count: int = 50) -> None:

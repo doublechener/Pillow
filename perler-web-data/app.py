@@ -10,28 +10,32 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from palette import MARD_PALETTE
-from theme import inject_global_css, render_hero
+from theme import (inject_global_css, render_hero,
+                   render_idle_pixel, mascot_html)
 import auth
 import db
 import storage
 from storage import PATTERN_BUCKET, OCR_BUCKET
 
-st.set_page_config(page_title="拼豆图纸生成器", page_icon="🎨", layout="wide")
+APP_NAME = "豆映工坊"
+APP_TAGLINE = "像素映豆 · 库存随手 · 灵感成图"
+
+st.set_page_config(page_title=APP_NAME, page_icon="🧶", layout="wide")
 inject_global_css()
 
 # ============================================================
-# 登录门:未登录直接 stop
+# 登录门
 # ============================================================
 session = auth.require_login()
 db.ensure_inventory_seeded()
 
 # ============================================================
-# 顶栏:像素小熊 hero + 登出
+# 顶栏
 # ============================================================
 top_l, top_r = st.columns([5, 1])
 with top_l:
-	render_hero("拼豆图纸生成器",
-	            f"👤 {session['email']} · 云端数据(Supabase) · 让创作如拼豆一般缤纷 ✨",
+	render_hero(APP_NAME,
+	            f"👤 {session['email']} · {APP_TAGLINE} ✨",
 	            mascot_size=72)
 with top_r:
 	st.write("")
@@ -151,37 +155,64 @@ SERIES_LABELS = {
 	"E":"粉色","F":"红色","G":"棕肤色","H":"黑白灰","M":"莫兰迪",
 }
 
+PAGES = {
+	"gen":       "🖼️ 生成图纸",
+	"inv":       "📦 编辑库存",
+	"recognize": "🔍 识别已有拼豆图",
+	"history":   "📚 历史记录",
+	"palette":   "🎨 色板",
+}
+
 # ============================================================
-# 侧边栏
+# 顶栏页面导航(分段控件,糖果渐变高亮,告别红点单选)+ 侧边栏上下文参数
 # ============================================================
+page = st.segmented_control(
+	"页面导航", list(PAGES.values()),
+	default=PAGES["gen"], label_visibility="collapsed",
+	key="nav_page")
+if page is None:  # 分段控件允许再点一下取消选择,这里兜底
+	page = PAGES["gen"]
+st.divider()
+
 with st.sidebar:
-	st.header("⚙️ 参数设置")
-	width_beads = st.slider("横向豆数", 10, 120, 29, step=1)
-	auto_height = st.checkbox("按比例自动计算高度", value=True)
-	height_beads = None if auto_height else st.slider("纵向豆数", 10, 120, 29, 1)
-	cell_size = st.slider("格子像素", 8, 60, 22, step=2)
-	show_grid = st.checkbox("显示网格", value=True)
-	show_codes = st.checkbox("在格子里写色号(A5/H7…)", value=True)
-
+	st.markdown(
+		f"<div style='display:flex;align-items:center;gap:10px;"
+		f"margin-bottom:6px;'>{mascot_html(28)}"
+		f"<span style='font-weight:800;font-size:18px;"
+		f"background:linear-gradient(90deg,#FF6B9D,#6BB6FF);"
+		f"-webkit-background-clip:text;-webkit-text-fill-color:transparent;'>"
+		f"{APP_NAME}</span></div>",
+		unsafe_allow_html=True)
 	st.divider()
-	st.header("📦 库存")
-	check_inventory = st.checkbox("启用库存校验", value=True)
-	only_in_stock = st.checkbox("仅使用有库存的颜色", value=False)
+
+	if page == PAGES["gen"]:
+		st.subheader("⚙️ 生成参数")
+		width_beads = st.slider("横向豆数", 10, 120, 29, step=1)
+		auto_height = st.checkbox("按比例自动计算高度", value=True)
+		height_beads = None if auto_height else st.slider(
+			"纵向豆数", 10, 120, 29, 1)
+		cell_size = st.slider("格子像素", 8, 60, 22, step=2)
+		show_grid = st.checkbox("显示网格", value=True)
+		show_codes = st.checkbox("在格子里写色号(A5/H7…)", value=True)
+		st.divider()
+		st.subheader("📦 库存联动")
+		check_inventory = st.checkbox("启用库存校验", value=True)
+		only_in_stock = st.checkbox("仅使用有库存的颜色", value=False)
+	elif page == PAGES["inv"]:
+		render_idle_pixel("📦 库存编辑参数都在右侧页内\n双模式自由切换 ✿")
+	elif page == PAGES["recognize"]:
+		render_idle_pixel("🔍 识别参数随上传图片\n即时显示在右侧 ✿")
+	elif page == PAGES["history"]:
+		render_idle_pixel("📚 翻翻你创作过的拼豆\n灵感都在这里 ✿")
+	elif page == PAGES["palette"]:
+		render_idle_pixel("🎨 221 色任你浏览\n找色找灵感 ✿")
 
 # ============================================================
-# Tabs
+# 页面分发
 # ============================================================
-tabs = st.tabs([
-	"🖼️ 生成图纸",
-	"📦 编辑库存",
-	"🔍 识别已有拼豆图",
-	"📚 历史记录",
-	"🎨 色板",
-])
-tab_gen, tab_inv, tab_recognize, tab_history, tab_palette = tabs
 
-# ---------- Tab 1: 生成图纸 ----------
-with tab_gen:
+# ---------- 生成图纸 ----------
+if page == PAGES["gen"]:
 	uploaded = st.file_uploader("上传图片",
 		type=["png","jpg","jpeg","webp","bmp"])
 	col_l, col_r = st.columns(2)
@@ -261,15 +292,21 @@ with tab_gen:
 				mime="image/png")
 
 			if check_inventory and shortage_items:
-				db.insert_shortage("generate", shortage_items, ref_id=pattern_id)
-				st.warning(f"🛒 共 {shortage} 种颜色需要补货,已记入补货历史")
+				total_short = sum(i["short"] for i in shortage_items)
+				st.warning(f"🛒 共 **{shortage}** 种颜色需要补货 · 缺 "
+				           f"**{total_short}** 颗,详细清单见下方")
 				st.dataframe(pd.DataFrame(shortage_items),
 					width="stretch", hide_index=True)
+				st.download_button("⬇️ 导出补货清单 CSV",
+					pd.DataFrame(shortage_items).to_csv(index=False)
+						.encode("utf-8-sig"),
+					file_name=f"shortage_{pattern_id[:8]}.csv",
+					mime="text/csv")
 	else:
 		st.info("👈 在上方上传一张图片开始")
 
-# ---------- Tab 2: 编辑库存 ----------
-with tab_inv:
+# ---------- 编辑库存 ----------
+elif page == PAGES["inv"]:
 	inv = db.load_inventory()
 	last_ts = db.last_updated()
 	total_colors = len(inv)
@@ -461,8 +498,8 @@ with tab_inv:
 		st.dataframe(series_df, width="stretch", hide_index=True,
 			column_config={"总颗数": st.column_config.NumberColumn("总颗数", format="%d")})
 
-# ---------- Tab 3: 识别已有拼豆图 ----------
-with tab_recognize:
+# ---------- 识别已有拼豆图 ----------
+elif page == PAGES["recognize"]:
 	st.subheader("🔍 识别已有拼豆图")
 	st.caption("OCR 直接读图例文字 / 逐格采样色块,识别后可一键扣减云端库存。")
 	mode = st.radio("识别方式",
@@ -577,10 +614,9 @@ with tab_recognize:
 					db.save_inventory(updates)
 					if ocr_id:
 						db.mark_ocr_deducted(ocr_id)
-					if shortage_items:
-						db.insert_shortage("recognize_ocr", shortage_items,
-						                   ref_id=ocr_id)
-					st.success(f"✅ 已扣减 {len(updates)} 个色号")
+					st.success(f"✅ 已扣减 {len(updates)} 个色号" + (
+						f" · 其中 {len(shortage_items)} 个色号原本不足,已扣到 0"
+						if shortage_items else ""))
 					for k in ("ocr_parsed","ocr_raw_lines","ocr_unknown","ocr_id"):
 						st.session_state.pop(k, None)
 					st.rerun()
@@ -730,10 +766,9 @@ with tab_recognize:
 				db.save_inventory(updates)
 				if rec_id:
 					db.mark_ocr_deducted(rec_id)
-				if shortage_items:
-					db.insert_shortage("recognize_grid", shortage_items,
-					                   ref_id=rec_id)
-				st.success(f"✅ 已扣减 {len(updates)} 个色号")
+				st.success(f"✅ 已扣减 {len(updates)} 个色号" + (
+					f" · 其中 {len(shortage_items)} 个色号原本不足,已扣到 0"
+					if shortage_items else ""))
 				for k in ("rec_counter","rec_preview_bytes","rec_id"):
 					st.session_state.pop(k, None)
 				st.rerun()
@@ -743,10 +778,10 @@ with tab_recognize:
 					st.session_state.pop(k, None)
 				st.rerun()
 
-# ---------- Tab 4: 历史记录 ----------
-with tab_history:
+# ---------- 历史记录 ----------
+elif page == PAGES["history"]:
 	st.subheader("📚 历史记录")
-	hist_tabs = st.tabs(["🖼️ 我的图纸", "🔍 OCR 历史", "🛒 补货清单"])
+	hist_tabs = st.tabs(["🖼️ 我的图纸", "🔍 OCR 历史"])
 
 	# ===== 我的图纸 =====
 	with hist_tabs[0]:
@@ -821,42 +856,8 @@ with tab_history:
 					                     key=lambda x: -x[1])])
 				st.dataframe(parsed_df, width="stretch", hide_index=True)
 
-	# ===== 补货清单 =====
-	with hist_tabs[2]:
-		shorts = db.list_shortages(limit=100)
-		hc1, hc2 = st.columns([3, 1])
-		hc1.caption(f"共 {len(shorts)} 条补货清单")
-		confirm_sho = hc1.checkbox("我确认要清空所有补货清单",
-			key="confirm_clear_sho")
-		if hc2.button("🗑️ 清空全部", key="clear_all_sho",
-		              width="stretch", disabled=not confirm_sho):
-			n = db.delete_all_shortages()
-			st.success(f"✅ 已清空 {n} 条补货清单")
-			st.rerun()
-		st.divider()
-		if not shorts:
-			st.info("还没有补货清单。")
-		for s in shorts:
-			cols = st.columns([4, 1, 1])
-			cols[0].markdown(
-				f"**{s['created_at'][:19].replace('T',' ')}** · "
-				f"{s['source']} · 缺 {s['total_shortage']} 颗")
-			df_s = pd.DataFrame(s["items"])
-			cols[1].download_button("⬇️ CSV",
-				df_s.to_csv(index=False).encode("utf-8-sig"),
-				file_name=f"shortage_{s['id'][:8]}.csv",
-				mime="text/csv", key=f"dl_sho_{s['id']}",
-				width="stretch")
-			if cols[2].button("🗑️ 删除", key=f"del_sho_{s['id']}",
-			                   width="stretch"):
-				db.delete_shortage(s["id"])
-				st.toast("已删除补货清单", icon="🗑️")
-				st.rerun()
-			with st.expander("📋 详情:缺货明细"):
-				st.dataframe(df_s, width="stretch", hide_index=True)
-
-# ---------- Tab 5: 色板 ----------
-with tab_palette:
+# ---------- 色板 ----------
+elif page == PAGES["palette"]:
 	st.subheader("MARD 221 色色板")
 	cols_per_row = 12
 	names = list(MARD_PALETTE.keys())
