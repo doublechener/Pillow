@@ -75,36 +75,61 @@ h1, h2, h3 {
 	font-weight: 700;
 }
 
-/* 分段控件(顶栏页面导航):糖果渐变高亮、告别红点 */
-[data-testid="stSegmentedControl"] {
-	display: flex; justify-content: center;
+/* 顶栏页面导航(横向 st.radio):隐藏圆点,1:1 复刻 stTabs 胶囊样式
+   DOM:[data-testid=stRadio] > [role=radiogroup] > label > (div圆点 + div文字)
+   思路:把第一个子 div(圆点容器)display:none 掉,label 整体当胶囊 */
+[data-testid="stRadio"] > div[role="radiogroup"] {
+	gap: 8px;
 	background: rgba(255,255,255,.5);
 	backdrop-filter: blur(10px);
-	padding: 6px; border-radius: 16px;
+	padding: 6px;
+	border-radius: 16px;
 	border: 1px solid rgba(255,182,217,.3);
+	display: inline-flex;
+	flex-wrap: wrap;
+	width: fit-content;
 	margin: 6px 0 4px;
 }
-[data-testid="stSegmentedControl"] [role="radiogroup"] { gap: 6px; }
-[data-testid="stSegmentedControl"] label {
+[data-testid="stRadio"] > div[role="radiogroup"] > label {
+	height: 44px !important;
+	min-height: 44px !important;
+	padding: 0 18px !important;
+	margin: 0 !important;
 	border-radius: 12px !important;
-	padding: 8px 18px !important;
-	font-weight: 600 !important;
-	color: #7A7A9A !important;
 	background: transparent !important;
-	border: none !important;
-	transition: all .25s cubic-bezier(.4,0,.2,1) !important;
+	color: #7A7A9A !important;
+	font-weight: 600 !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	cursor: pointer !important;
+	transition: all .3s cubic-bezier(.4,0,.2,1) !important;
 }
-[data-testid="stSegmentedControl"] label:hover {
-	background: rgba(255,182,217,.18) !important;
+/* 隐藏 BaseWeb 单选的圆形点(label 内第一个子 div) */
+[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+	display: none !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label p {
+	color: inherit !important;
+	font-weight: 600 !important;
+	margin: 0 !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
+	background: rgba(255,182,217,.2) !important;
 	color: #FF6B9D !important;
 	transform: translateY(-1px);
 }
-[data-testid="stSegmentedControl"] label:has(input:checked) {
+[data-testid="stRadio"] > div[role="radiogroup"] > label:hover p {
+	color: #FF6B9D !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
 	background: linear-gradient(135deg, #FFB6D9 0%, #A8DAFF 100%) !important;
 	color: white !important;
 	box-shadow: 0 4px 12px rgba(255,182,217,.4) !important;
 }
-[data-testid="stSegmentedControl"] label input { display: none !important; }
+[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) p {
+	color: white !important;
+}
 
 /* Tab 美化 + 切换淡入 */
 .stTabs [data-baseweb="tab-list"] {

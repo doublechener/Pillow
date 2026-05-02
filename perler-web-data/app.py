@@ -164,14 +164,13 @@ PAGES = {
 }
 
 # ============================================================
-# 顶栏页面导航(分段控件,糖果渐变高亮,告别红点单选)+ 侧边栏上下文参数
+# 顶栏页面导航(横向 st.radio + CSS 胶囊样式,与底部历史 Tab 视觉一致)
+# DOM 稳定可控:label > 圆点(已隐藏) + 文字,任意 Streamlit 版本都吃这套样式
 # ============================================================
-page = st.segmented_control(
+page = st.radio(
 	"页面导航", list(PAGES.values()),
-	default=PAGES["gen"], label_visibility="collapsed",
+	horizontal=True, label_visibility="collapsed",
 	key="nav_page")
-if page is None:  # 分段控件允许再点一下取消选择,这里兜底
-	page = PAGES["gen"]
 st.divider()
 
 with st.sidebar:
