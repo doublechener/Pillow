@@ -1,0 +1,6 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+# 旧文件,如果还在的话
+inventory.db
+inventory.json
