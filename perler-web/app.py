@@ -42,7 +42,7 @@ def find_nearest_color(pixel_rgb, palette):
 
 
 def image_to_perler(img: Image.Image, width_beads, height_beads,
-                   palette, cell_size, show_grid):
+                   palette, cell_size, show_grid, show_codes=False):
     img = img.convert("RGBA")
     bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
     img = Image.alpha_composite(bg, img).convert("RGB")
@@ -92,6 +92,26 @@ def image_to_perler(img: Image.Image, width_beads, height_beads,
             draw.line([(0, y * cell_size),
                        (width_beads * cell_size, y * cell_size)],
                       fill=(220, 220, 220), width=1)
+
+    # 在每格上叠加色号文字(类似官方拼豆图样式)
+    if show_codes and cell_size >= 12:
+        font_size = max(7, int(cell_size * 0.42))
+        code_font = _load_font(font_size)
+        for y in range(height_beads):
+            for x in range(width_beads):
+                idx = int(nearest_idx[y, x])
+                name = palette_names[idx]
+                r, g, b = rgb_grid[y][x]
+                # 感知亮度:亮底用黑字,暗底用白字
+                lum = 0.299 * r + 0.587 * g + 0.114 * b
+                text_color = (0, 0, 0) if lum > 140 else (255, 255, 255)
+                bbox = draw.textbbox((0, 0), name, font=code_font)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+                x0, y0 = x * cell_size, y * cell_size
+                tx = x0 + (cell_size - tw) // 2 - bbox[0]
+                ty = y0 + (cell_size - th) // 2 - bbox[1]
+                draw.text((tx, ty), name, fill=text_color, font=code_font)
 
     return canvas, bead_count
 
@@ -157,8 +177,12 @@ with st.sidebar:
         height_beads = None
     else:
         height_beads = st.slider("纵向豆数", 10, 120, 29, step=1)
-    cell_size = st.slider("格子像素", 8, 60, 20, step=2)
+    cell_size = st.slider("格子像素", 8, 60, 22, step=2)
     show_grid = st.checkbox("显示网格", value=True)
+    show_codes = st.checkbox(
+        "在格子里写色号(A5/H7…)", value=True,
+        help="类似官方拼豆图,在每格中央叠加色号。格子像素 ≥ 12 时才会显示。",
+    )
 
     st.divider()
     st.header("📦 库存")
@@ -168,7 +192,9 @@ with st.sidebar:
 # ============================================================
 # 主区:三个 Tab
 # ============================================================
-tab_gen, tab_inv, tab_palette = st.tabs(["🖼️ 生成图纸", "📦 编辑库存", "🎨 色板"])
+tab_gen, tab_inv, tab_recognize, tab_palette = st.tabs(
+    ["🖼️ 生成图纸", "📦 编辑库存", "🔍 识别已有拼豆图", "🎨 色板"]
+)
 
 # ---------- Tab 1: 生成图纸 ----------
 with tab_gen:
@@ -191,7 +217,7 @@ with tab_gen:
             with st.spinner("正在生成…"):
                 pattern_img, bead_count = image_to_perler(
                     src, width_beads, height_beads,
-                    palette, cell_size, show_grid,
+                    palette, cell_size, show_grid, show_codes,
                 )
                 legend_img = generate_legend(
                     bead_count, MARD_PALETTE,
@@ -447,7 +473,379 @@ with tab_inv:
             },
         )
 
-# ---------- Tab 3: 色板 ----------
+# ---------- Tab 3: 识别已有拼豆图(反向计数 + 扣减库存) ----------
+with tab_recognize:
+    st.subheader("🔍 识别已有拼豆图")
+    st.caption(
+        "两种识别方式:① OCR 直接读图例文字(推荐,精度最高);"
+        "② 逐格采样色块颜色(适合无图例的图)。识别后可一键扣减库存。"
+    )
+
+    rec_mode = st.radio(
+        "识别方式",
+        ["📋 OCR 读图例文字(推荐)", "🎨 整图逐格识别色块"],
+        horizontal=True,
+        key="rec_mode",
+    )
+
+    # ============================================================
+    # 模式 A:OCR 读图例文字(推荐)
+    # ============================================================
+    if rec_mode.startswith("📋"):
+        st.info(
+            "📋 适用于带图例文字的拼豆图(图例形如 `A5 (191)  A7 (119) …`)。"
+            "直接 OCR 解析,无需输入格数,精度最高。"
+        )
+
+        @st.cache_resource(show_spinner="正在加载 OCR 模型(首次约 10 秒)…")
+        def _get_ocr_engine():
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                return RapidOCR()
+            except ImportError:
+                return None
+
+        ocr_file = st.file_uploader(
+            "上传带图例的拼豆图",
+            type=["png", "jpg", "jpeg", "webp", "bmp"],
+            key="ocr_uploader",
+        )
+        ocr_crop = st.slider(
+            "只 OCR 图片底部 X% 区域(图例通常在底部)",
+            10, 100, 25, step=5, key="ocr_crop_pct",
+            help="数值越小越只看底部图例,过滤掉上方拼豆主体的色号文字;"
+                 "如果图例在顶部或没有图例,设为 100 全图 OCR。",
+        )
+
+        if ocr_file:
+            ocr_img = Image.open(ocr_file).convert("RGB")
+            arr_ocr = np.array(ocr_img)
+            Ho, Wo = arr_ocr.shape[:2]
+            cut = Ho * (100 - ocr_crop) // 100
+            legend_arr = arr_ocr[cut:, :]
+            legend_img = Image.fromarray(legend_arr)
+
+            cp1, cp2 = st.columns(2)
+            cp1.image(ocr_img, caption=f"原图 {Wo}×{Ho}",
+                      use_container_width=True)
+            cp2.image(
+                legend_img,
+                caption=f"OCR 区域 {legend_arr.shape[1]}×{legend_arr.shape[0]}",
+                use_container_width=True,
+            )
+
+            if st.button("🔬 开始 OCR 识别", type="primary",
+                         use_container_width=True, key="ocr_run"):
+                engine = _get_ocr_engine()
+                if engine is None:
+                    st.error(
+                        "未安装 rapidocr-onnxruntime。请在 requirements.txt "
+                        "加上 `rapidocr-onnxruntime>=1.3` 后重启 / 重新部署。"
+                    )
+                else:
+                    with st.spinner("OCR 中…"):
+                        result, _elapse = engine(legend_arr)
+                    if not result:
+                        st.warning("OCR 没读到任何文字,试试调大「OCR 区域」百分比。")
+                    else:
+                        import re
+                        texts = [r[1] for r in result]
+                        all_text = " ".join(texts)
+                        # 匹配「字母+数字(计数)」,字母限定 A-H 或 M
+                        pattern = re.compile(
+                            r"([A-Ha-hMm])\s*(\d{1,2})\s*"
+                            r"[\(（]\s*(\d{1,5})\s*[\)）]"
+                        )
+                        matches = pattern.findall(all_text)
+
+                        parsed = {}
+                        unknown = []
+                        for letter, num, count in matches:
+                            code = letter.upper() + num
+                            if code in MARD_PALETTE:
+                                parsed[code] = parsed.get(code, 0) + int(count)
+                            else:
+                                unknown.append((code, int(count)))
+
+                        st.session_state["ocr_parsed"] = parsed
+                        st.session_state["ocr_raw_lines"] = texts
+                        st.session_state["ocr_unknown"] = unknown
+
+        if st.session_state.get("ocr_parsed") is not None:
+            parsed = st.session_state["ocr_parsed"]
+            raw_lines = st.session_state.get("ocr_raw_lines", [])
+            unknown = st.session_state.get("ocr_unknown", [])
+
+            st.divider()
+            st.subheader("✅ OCR 解析结果")
+
+            with st.expander(f"🔍 OCR 原始文字({len(raw_lines)} 段)",
+                             expanded=False):
+                st.code("\n".join(raw_lines))
+
+            if not parsed:
+                st.warning(
+                    "没有匹配到「色号(数量)」格式的文字。"
+                    "请确认图例区域被裁进 OCR 范围,或换用「整图逐格识别色块」模式。"
+                )
+            else:
+                inv_now = db.load_inventory()
+                items = sorted(parsed.items(), key=lambda x: -x[1])
+                rows = []
+                shortage = 0
+                for code, need in items:
+                    stock = inv_now.get(code, 0)
+                    diff = stock - need
+                    if diff < 0:
+                        shortage += 1
+                    rows.append({
+                        "色号": code,
+                        "需要": need,
+                        "库存": stock,
+                        "扣减后": max(0, diff),
+                        "状态": "✅ 充足" if diff >= 0 else f"❌ 缺{-diff}",
+                    })
+                ocr_df = pd.DataFrame(rows)
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("总豆数", sum(n for _, n in items))
+                m2.metric("色号种类", len(items))
+                m3.metric(
+                    "需补货色号", shortage,
+                    delta=None if shortage == 0 else f"-{shortage}",
+                    delta_color="inverse",
+                )
+
+                st.dataframe(ocr_df, use_container_width=True, hide_index=True)
+
+                if unknown:
+                    st.warning(
+                        f"⚠️ 解析到 {len(unknown)} 个不在 MARD 色板中的色号"
+                        "(疑似 OCR 误识),已忽略:"
+                        + ", ".join(f"{c}({n})" for c, n in unknown[:20])
+                    )
+
+                d1, d2, d3 = st.columns(3)
+                d1.download_button(
+                    "⬇️ 导出 CSV",
+                    ocr_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="ocr_recognized.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+                if d2.button("➖ 从库存中扣减", type="primary",
+                             use_container_width=True, key="ocr_deduct"):
+                    updates = {}
+                    for code, need in items:
+                        updates[code] = max(0, inv_now.get(code, 0) - need)
+                    db.save_inventory(updates)
+                    st.success(
+                        f"✅ 已扣减 {len(updates)} 个色号(库存不会变成负数)。"
+                    )
+                    st.session_state.pop("ocr_parsed", None)
+                    st.session_state.pop("ocr_raw_lines", None)
+                    st.session_state.pop("ocr_unknown", None)
+                    st.rerun()
+                if d3.button("🗑️ 清空", use_container_width=True,
+                             key="ocr_clear"):
+                    st.session_state.pop("ocr_parsed", None)
+                    st.session_state.pop("ocr_raw_lines", None)
+                    st.session_state.pop("ocr_unknown", None)
+                    st.rerun()
+
+    # ============================================================
+    # 模式 B:整图逐格识别色块(原有逻辑,适合无图例图)
+    # ============================================================
+    else:
+        st.info("🎨 适用于纯色块拼豆图(无图例文字)。需要手动输入横/纵格数。")
+
+        rec_file = st.file_uploader(
+            "上传拼豆图图片",
+            type=["png", "jpg", "jpeg", "webp", "bmp"],
+            key="rec_uploader",
+        )
+
+        rc1, rc2, rc3 = st.columns(3)
+        rec_w = rc1.number_input("横向格数", 2, 300, 50, step=1, key="rec_w")
+        rec_h = rc2.number_input("纵向格数", 2, 300, 45, step=1, key="rec_h")
+        sample_mode = rc3.selectbox(
+            "采样方式", ["格子中心 60% 均值", "中心单像素"], index=0,
+            help="均值更鲁棒,能避开网格线和文字;单像素更快。",
+        )
+
+        rc4, rc5, rc6, rc7 = st.columns(4)
+        crop_left = rc4.slider("裁左 %", 0, 40, 0, key="rec_cl")
+        crop_right = rc5.slider("裁右 %", 0, 40, 0, key="rec_cr")
+        crop_top = rc6.slider("裁上 %", 0, 40, 0, key="rec_ct")
+        crop_bottom = rc7.slider("裁下 %", 0, 40, 0, key="rec_cb")
+        st.caption(
+            "⚠️ 如果图片包含坐标轴 / 图例 / 水印边框,请先用裁剪滑块把它们去掉,"
+            "只留纯色块网格区域。横/纵格数要与图纸真实格子数一致。"
+        )
+
+        if rec_file:
+            rec_img = Image.open(rec_file).convert("RGB")
+            arr_full = np.array(rec_img, dtype=np.int32)
+            H, W = arr_full.shape[:2]
+            ax0 = W * crop_left // 100
+            ax1 = W - W * crop_right // 100
+            ay0 = H * crop_top // 100
+            ay1 = H - H * crop_bottom // 100
+            arr = arr_full[ay0:ay1, ax0:ax1]
+            cropped_preview = Image.fromarray(arr.astype(np.uint8))
+
+            pcol1, pcol2 = st.columns(2)
+            pcol1.image(rec_img, caption=f"原图 {W}×{H}",
+                        use_container_width=True)
+            pcol2.image(
+                cropped_preview,
+                caption=f"裁剪后 {arr.shape[1]}×{arr.shape[0]}",
+                use_container_width=True,
+            )
+
+            if st.button("🔬 开始识别", type="primary",
+                         use_container_width=True, key="rec_run"):
+                HH, WW = arr.shape[:2]
+                cw = WW / rec_w
+                ch = HH / rec_h
+
+                palette_names = list(MARD_PALETTE.keys())
+                palette_rgb = np.array(
+                    [MARD_PALETTE[n] for n in palette_names], dtype=np.int32
+                )
+                weights = np.array([0.3, 0.59, 0.11], dtype=np.float32)
+
+                recognized = [[None] * int(rec_w) for _ in range(int(rec_h))]
+                with st.spinner("识别中…"):
+                    for yy in range(int(rec_h)):
+                        for xx in range(int(rec_w)):
+                            gx0 = int(xx * cw)
+                            gx1 = int((xx + 1) * cw)
+                            gy0 = int(yy * ch)
+                            gy1 = int((yy + 1) * ch)
+                            if sample_mode == "中心单像素":
+                                sample = arr[(gy0 + gy1) // 2, (gx0 + gx1) // 2]
+                            else:
+                                mx0 = gx0 + (gx1 - gx0) * 2 // 10
+                                mx1 = gx1 - (gx1 - gx0) * 2 // 10
+                                my0 = gy0 + (gy1 - gy0) * 2 // 10
+                                my1 = gy1 - (gy1 - gy0) * 2 // 10
+                                if mx1 <= mx0 or my1 <= my0:
+                                    sample = arr[(gy0 + gy1) // 2,
+                                                  (gx0 + gx1) // 2]
+                                else:
+                                    sample = arr[my0:my1, mx0:mx1].mean(axis=(0, 1))
+                            diff = sample.astype(np.int32) - palette_rgb
+                            dist = (diff * diff).astype(np.float32) @ weights
+                            idx = int(dist.argmin())
+                            recognized[yy][xx] = palette_names[idx]
+
+                counter = Counter()
+                for row in recognized:
+                    for name in row:
+                        counter[name] += 1
+
+                # 重建预览图(用识别到的色号渲染)
+                preview = Image.new(
+                    "RGB", (int(rec_w) * 16, int(rec_h) * 16), (255, 255, 255)
+                )
+                pdraw = ImageDraw.Draw(preview)
+                for yy in range(int(rec_h)):
+                    for xx in range(int(rec_w)):
+                        pdraw.rectangle(
+                            [xx * 16, yy * 16, (xx + 1) * 16, (yy + 1) * 16],
+                            fill=MARD_PALETTE[recognized[yy][xx]],
+                        )
+
+                st.session_state["rec_counter"] = dict(counter)
+                st.session_state["rec_preview_bytes"] = pil_to_bytes(preview)
+
+        if st.session_state.get("rec_counter"):
+            counter = st.session_state["rec_counter"]
+            st.divider()
+            st.subheader("✅ 识别结果")
+
+            st.image(
+                st.session_state["rec_preview_bytes"],
+                caption="识别结果重建图(用于核对识别准确度)",
+            )
+
+            ex1, ex2 = st.columns(2)
+            exclude_h1 = ex1.checkbox(
+                "排除 H1 纯白(常作背景)", value=True, key="rec_ex_h1",
+            )
+            exclude_h2 = ex2.checkbox(
+                "排除 H2 接近白(常作背景)", value=False, key="rec_ex_h2",
+            )
+
+            excludes = set()
+            if exclude_h1:
+                excludes.add("H1")
+            if exclude_h2:
+                excludes.add("H2")
+
+            items = sorted(
+                [(k, v) for k, v in counter.items() if k not in excludes],
+                key=lambda x: -x[1],
+            )
+
+            inv_now = db.load_inventory()
+            rows = []
+            shortage = 0
+            for code, need in items:
+                stock = inv_now.get(code, 0)
+                diff = stock - need
+                if diff < 0:
+                    shortage += 1
+                rows.append({
+                    "色号": code,
+                    "需要": need,
+                    "库存": stock,
+                    "扣减后": max(0, diff),
+                    "状态": "✅ 充足" if diff >= 0 else f"❌ 缺{-diff}",
+                })
+            rec_df = pd.DataFrame(rows)
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("总豆数", sum(n for _, n in items))
+            m2.metric("颜色种类", len(items))
+            m3.metric(
+                "需补货色号", shortage,
+                delta=None if shortage == 0 else f"-{shortage}",
+                delta_color="inverse",
+            )
+
+            st.dataframe(rec_df, use_container_width=True, hide_index=True)
+
+            d1, d2, d3 = st.columns(3)
+            d1.download_button(
+                "⬇️ 导出识别用量 CSV",
+                rec_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="recognized_usage.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+            if d2.button("➖ 从库存中扣减", type="primary",
+                         use_container_width=True, key="rec_deduct"):
+                updates = {}
+                for code, need in items:
+                    updates[code] = max(0, inv_now.get(code, 0) - need)
+                db.save_inventory(updates)
+                st.success(
+                    f"✅ 已扣减 {len(updates)} 个色号(库存不会变成负数)。"
+                    "切到「编辑库存」标签页可见最新结果。"
+                )
+                st.session_state.pop("rec_counter", None)
+                st.session_state.pop("rec_preview_bytes", None)
+                st.rerun()
+            if d3.button("🗑️ 清空识别结果", use_container_width=True,
+                         key="rec_clear"):
+                st.session_state.pop("rec_counter", None)
+                st.session_state.pop("rec_preview_bytes", None)
+                st.rerun()
+
+
+# ---------- Tab 4: 色板 ----------
 with tab_palette:
     st.subheader("MARD 221 色色板")
     cols_per_row = 12
