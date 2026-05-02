@@ -1,5 +1,6 @@
 streamlit>=1.32
 Pillow>=10.0
-numpy>=1.24
+numpy>=1.24,<2.3
 pandas>=2.0
-rapidocr-onnxruntime>=1.3   # OCR 引擎(纯 Python + ONNX,轻量中英文识别)
+rapidocr-onnxruntime>=1.3,<1.5   # OCR 引擎(纯 Python + ONNX,轻量中英文识别)
+supabase>=2.5                    # Supabase Python SDK(云端持久化 + Auth)
