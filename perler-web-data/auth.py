@@ -6,6 +6,7 @@ st.session_state['sb_session'],由 supabase_client.get_client() 自动注入。
 """
 import streamlit as st
 from supabase_client import _base_client, get_client
+from theme import inject_global_css, render_hero
 
 
 def _save_session(sess) -> None:
@@ -57,8 +58,10 @@ def require_login() -> dict | None:
 	if sess:
 		return sess
 
-	st.title("🎨 拼豆图纸生成器")
-	st.caption("基于 MARD 拼豆 221 色官方色板 · 云端多用户版")
+	inject_global_css()
+	render_hero("拼豆图纸生成器",
+	            "基于 MARD 拼豆 221 色官方色板 · 云端多用户版 · 让创作如拼豆一般缤纷 ✨",
+	            mascot_size=80)
 
 	tab_login, tab_signup = st.tabs(["🔑 登录", "📝 注册"])
 

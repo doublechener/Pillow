@@ -10,12 +10,14 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from palette import MARD_PALETTE
+from theme import inject_global_css, render_hero
 import auth
 import db
 import storage
 from storage import PATTERN_BUCKET, OCR_BUCKET
 
 st.set_page_config(page_title="拼豆图纸生成器", page_icon="🎨", layout="wide")
+inject_global_css()
 
 # ============================================================
 # 登录门:未登录直接 stop
@@ -24,14 +26,18 @@ session = auth.require_login()
 db.ensure_inventory_seeded()
 
 # ============================================================
-# 顶栏:用户信息 + 登出
+# 顶栏:像素小熊 hero + 登出
 # ============================================================
-top_l, top_r = st.columns([4, 1])
-top_l.title("🎨 拼豆图纸生成器")
-top_l.caption(f"👤 已登录:{session['email']} · 云端数据(Supabase)")
-if top_r.button("🚪 登出", width="stretch"):
-	auth.sign_out()
-	st.rerun()
+top_l, top_r = st.columns([5, 1])
+with top_l:
+	render_hero("拼豆图纸生成器",
+	            f"👤 {session['email']} · 云端数据(Supabase) · 让创作如拼豆一般缤纷 ✨",
+	            mascot_size=72)
+with top_r:
+	st.write("")
+	if st.button("🚪 登出", width="stretch"):
+		auth.sign_out()
+		st.rerun()
 
 
 # ============================================================
@@ -281,59 +287,163 @@ with tab_inv:
 		st.caption(f"🕒 最近更新: {last_ts}")
 	st.divider()
 
-	f1,f2,f3 = st.columns([3,2,3])
+	edit_mode = st.radio("编辑模式",
+		["📋 表格模式", "🎨 色板模式"],
+		horizontal=True, key="inv_edit_mode",
+		help="表格模式适合搜索和导入导出;色板模式按 MARD 色板布局直接看色找色,直观高效")
 	all_series = sorted({k[0] for k in inv})
-	series_filter = f1.multiselect("系列筛选", all_series, default=all_series,
-		format_func=lambda s: f"{s} · {SERIES_LABELS.get(s,'')}")
-	status_filter = f2.radio("状态", ["全部","有库存","缺货"], horizontal=True)
-	search_text = f3.text_input("🔍 搜索色号", placeholder="例如 A12、H7")
 
-	rows = []
-	for code, stock in inv.items():
-		if code[0] not in series_filter: continue
-		if status_filter == "有库存" and stock <= 0: continue
-		if status_filter == "缺货" and stock > 0: continue
-		if search_text and search_text.strip().upper() not in code.upper(): continue
-		r,g,b = MARD_PALETTE.get(code, (200,200,200))
-		rows.append({"色块":_swatch((r,g,b)), "色号":code, "系列":code[0],
-		             "RGB":f"({r}, {g}, {b})", "库存":int(stock),
-		             "状态":"✅ 有货" if stock>0 else "❌ 缺货"})
-	df = pd.DataFrame(rows)
-	if df.empty:
-		st.info("当前筛选条件下没有色号。")
-		edited = df
-	else:
-		st.caption(f"显示 {len(df)} 个色号 · 双击「库存」修改,然后点「保存修改」")
-		edited = st.data_editor(df, width="stretch", height=520, hide_index=True,
-			column_config={
-				"色块": st.column_config.ImageColumn("色块", width="small"),
-				"库存": st.column_config.NumberColumn("库存 (颗)",
-					min_value=0, step=1, format="%d"),
-			},
-			disabled=["色块","色号","系列","RGB","状态"],
-			key="inv_editor")
-	st.divider()
-	b1,b2,b3 = st.columns(3)
-	if b1.button("💾 保存修改", type="primary", width="stretch"):
-		if not df.empty:
-			updates = {row["色号"]: int(row["库存"] or 0)
-			           for _, row in edited.iterrows()}
-			db.save_inventory(updates)
-			st.success(f"✅ 已写入云端({len(updates)} 个色号)")
+	if edit_mode == "📋 表格模式":
+		# ====== 表格模式 ======
+		f1,f2,f3 = st.columns([3,2,3])
+		series_filter = f1.multiselect("系列筛选", all_series, default=all_series,
+			format_func=lambda s: f"{s} · {SERIES_LABELS.get(s,'')}",
+			key="tbl_series_filter")
+		status_filter = f2.radio("状态", ["全部","有库存","缺货"],
+			horizontal=True, key="tbl_status_filter")
+		search_text = f3.text_input("🔍 搜索色号", placeholder="例如 A12、H7",
+			key="tbl_search")
+
+		rows = []
+		for code, stock in inv.items():
+			if code[0] not in series_filter: continue
+			if status_filter == "有库存" and stock <= 0: continue
+			if status_filter == "缺货" and stock > 0: continue
+			if search_text and search_text.strip().upper() not in code.upper(): continue
+			r,g,b = MARD_PALETTE.get(code, (200,200,200))
+			rows.append({"色块":_swatch((r,g,b)), "色号":code, "系列":code[0],
+			             "RGB":f"({r}, {g}, {b})", "库存":int(stock),
+			             "状态":"✅ 有货" if stock>0 else "❌ 缺货"})
+		df = pd.DataFrame(rows)
+		if df.empty:
+			st.info("当前筛选条件下没有色号。")
+			edited = df
+		else:
+			st.caption(f"显示 {len(df)} 个色号 · 双击「库存」修改,然后点「保存修改」")
+			edited = st.data_editor(df, width="stretch", height=520, hide_index=True,
+				column_config={
+					"色块": st.column_config.ImageColumn("色块", width="small"),
+					"库存": st.column_config.NumberColumn("库存 (颗)",
+						min_value=0, step=1, format="%d"),
+				},
+				disabled=["色块","色号","系列","RGB","状态"],
+				key="inv_editor")
+		st.divider()
+		b1,b2,b3 = st.columns(3)
+		if b1.button("💾 保存修改", type="primary", width="stretch",
+		             key="tbl_save"):
+			if not df.empty:
+				updates = {row["色号"]: int(row["库存"] or 0)
+				           for _, row in edited.iterrows()}
+				db.save_inventory(updates)
+				st.success(f"✅ 已写入云端({len(updates)} 个色号)")
+				st.rerun()
+		full_csv = pd.DataFrame([{"色号":k,"库存":v} for k,v in inv.items()]
+			).to_csv(index=False).encode("utf-8-sig")
+		b2.download_button("⬇️ 导出全部 CSV", full_csv,
+			file_name="inventory.csv", mime="text/csv", width="stretch",
+			key="tbl_export")
+		up_csv = b3.file_uploader("📤 导入 CSV(覆盖整个库存)", type="csv",
+			label_visibility="collapsed", key="tbl_import")
+		if up_csv:
+			new_df = pd.read_csv(up_csv)
+			new_inv = {row["色号"]: int(row["库存"] or 0)
+			           for _, row in new_df.iterrows() if pd.notna(row.get("色号"))}
+			db.replace_all(new_inv)
+			st.success(f"✅ 已从 CSV 导入 {len(new_inv)} 条")
 			st.rerun()
-	full_csv = pd.DataFrame([{"色号":k,"库存":v} for k,v in inv.items()]
-		).to_csv(index=False).encode("utf-8-sig")
-	b2.download_button("⬇️ 导出全部 CSV", full_csv,
-		file_name="inventory.csv", mime="text/csv", width="stretch")
-	up_csv = b3.file_uploader("📤 导入 CSV(覆盖整个库存)", type="csv",
-		label_visibility="collapsed")
-	if up_csv:
-		new_df = pd.read_csv(up_csv)
-		new_inv = {row["色号"]: int(row["库存"] or 0)
-		           for _, row in new_df.iterrows() if pd.notna(row.get("色号"))}
-		db.replace_all(new_inv)
-		st.success(f"✅ 已从 CSV 导入 {len(new_inv)} 条")
-		st.rerun()
+
+	else:
+		# ====== 色板模式 ======
+		st.caption("🎨 按 MARD 色板布局编辑库存。每个色块上方为色号(文字色随明度自动黑白),"
+		           "下方直接修改颗数;右上小圆点 🔴 缺货 / 🟡 1–49 / 🟢 ≥50;"
+		           "修改后点底部「💾 保存色板修改」一次性提交。")
+		pf1, pf2 = st.columns([3, 2])
+		pal_series = pf1.multiselect("系列筛选", all_series, default=all_series,
+			format_func=lambda s: f"{s} · {SERIES_LABELS.get(s,'')}",
+			key="pal_series_filter")
+		pal_status = pf2.radio("状态", ["全部", "有库存", "缺货"],
+			horizontal=True, key="pal_status_filter")
+
+		cols_per_row = 8
+		rendered_codes: list[str] = []
+
+		with st.form("palette_inv_form", border=False):
+			for series in sorted(pal_series):
+				series_codes = [c for c in inv if c[0] == series]
+				if pal_status == "有库存":
+					series_codes = [c for c in series_codes if inv[c] > 0]
+				elif pal_status == "缺货":
+					series_codes = [c for c in series_codes if inv[c] <= 0]
+				if not series_codes:
+					continue
+				series_total = sum(inv[c] for c in series_codes)
+				st.markdown(
+					f"<div style='margin:18px 0 10px;padding:10px 16px;"
+					f"background:linear-gradient(90deg,rgba(255,182,217,.18),"
+					f"rgba(168,218,255,.18));border-radius:12px;"
+					f"border:1px solid rgba(255,182,217,.3);'>"
+					f"<b style='font-size:15px;'>{series} · "
+					f"{SERIES_LABELS.get(series, '')}</b>"
+					f"<span style='font-size:12px;color:#7A7A9A;margin-left:10px;'>"
+					f"{len(series_codes)} 色 · 共 {series_total:,} 颗</span></div>",
+					unsafe_allow_html=True)
+				for i in range(0, len(series_codes), cols_per_row):
+					row = st.columns(cols_per_row)
+					for j, code in enumerate(series_codes[i:i + cols_per_row]):
+						r, g, b = MARD_PALETTE[code]
+						lum = 0.299 * r + 0.587 * g + 0.114 * b
+						text_color = "#1a1a2e" if lum > 140 else "#ffffff"
+						stock = int(inv.get(code, 0))
+						dot = ("#FF6B9D" if stock == 0
+						       else "#FFE9A8" if stock < 50
+						       else "#7ED6A0")
+						with row[j]:
+							st.markdown(
+								f'<div style="background:rgb({r},{g},{b});'
+								f'color:{text_color};'
+								f'border:1.5px solid rgba(0,0,0,.12);'
+								f'border-radius:10px 10px 0 0;border-bottom:none;'
+								f'padding:14px 4px 10px;text-align:center;'
+								f'font-weight:800;font-size:14px;letter-spacing:.5px;'
+								f'position:relative;text-shadow:0 1px 2px rgba(0,0,0,.08);">'
+								f'{code}'
+								f'<div style="position:absolute;top:6px;right:6px;'
+								f'width:9px;height:9px;border-radius:50%;'
+								f'background:{dot};'
+								f'box-shadow:0 0 0 2px rgba(255,255,255,.7);">'
+								f'</div></div>',
+								unsafe_allow_html=True)
+							st.number_input(
+								label=code, label_visibility="collapsed",
+								min_value=0, step=1, value=stock,
+								key=f"pal_{code}")
+							rendered_codes.append(code)
+
+			if not rendered_codes:
+				st.info("当前筛选条件下没有色号。")
+			st.divider()
+			sf1, sf2 = st.columns([3, 1])
+			sf1.caption(f"当前可编辑 **{len(rendered_codes)}** 个色号 · "
+			            "修改后点右侧按钮一次性提交")
+			submitted = sf2.form_submit_button("💾 保存色板修改",
+				type="primary", width="stretch",
+				disabled=not rendered_codes)
+
+		if submitted:
+			updates = {}
+			for code in rendered_codes:
+				key = f"pal_{code}"
+				if key in st.session_state:
+					new_val = int(st.session_state[key])
+					if new_val != int(inv.get(code, 0)):
+						updates[code] = new_val
+			if updates:
+				db.save_inventory(updates)
+				st.success(f"✅ 已写入云端({len(updates)} 个色号有变化)")
+				st.rerun()
+			else:
+				st.info("ℹ️ 没有需要保存的修改")
 
 	# ---- 各系列概览 ----
 	with st.expander("📊 各系列库存概览", expanded=False):
