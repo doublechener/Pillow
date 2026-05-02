@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from palette import MARD_PALETTE
 from supabase_client import get_client, current_user_id
+import storage
 
 ALL_CODES = list(MARD_PALETTE.keys())
 
@@ -124,7 +125,31 @@ def list_patterns(limit: int = 50) -> List[dict]:
 
 
 def delete_pattern(pattern_id: str) -> None:
-	get_client().table("patterns").delete().eq("id", pattern_id).execute()
+	"""删除一张图纸，同时清理云端图纸 + 图例 PNG。"""
+	cli = get_client()
+	res = cli.table("patterns").select(
+		"image_path, legend_path"
+	).eq("id", pattern_id).execute()
+	if res.data:
+		row = res.data[0]
+		storage.delete_object(storage.PATTERN_BUCKET, row.get("image_path"))
+		storage.delete_object(storage.PATTERN_BUCKET, row.get("legend_path"))
+	cli.table("patterns").delete().eq("id", pattern_id).execute()
+
+
+def delete_all_patterns() -> int:
+	"""清空当前用户的所有图纸 + 云端图片。返回删除的行数。"""
+	uid = current_user_id()
+	cli = get_client()
+	rows = (cli.table("patterns").select("image_path, legend_path")
+		.eq("user_id", uid).execute()).data or []
+	paths: List[str] = []
+	for r in rows:
+		if r.get("image_path"): paths.append(r["image_path"])
+		if r.get("legend_path"): paths.append(r["legend_path"])
+	storage.delete_objects(storage.PATTERN_BUCKET, paths)
+	cli.table("patterns").delete().eq("user_id", uid).execute()
+	return len(rows)
 
 
 # ============================================================
@@ -170,7 +195,24 @@ def list_ocr_history(limit: int = 50) -> List[dict]:
 
 
 def delete_ocr_record(ocr_id: str) -> None:
-	get_client().table("ocr_history").delete().eq("id", ocr_id).execute()
+	"""删除一条 OCR 历史，同时清理云端原图。"""
+	cli = get_client()
+	res = cli.table("ocr_history").select("source_path").eq("id", ocr_id).execute()
+	if res.data:
+		storage.delete_object(storage.OCR_BUCKET, res.data[0].get("source_path"))
+	cli.table("ocr_history").delete().eq("id", ocr_id).execute()
+
+
+def delete_all_ocr() -> int:
+	"""清空当前用户的所有 OCR 历史 + 云端原图。返回删除的行数。"""
+	uid = current_user_id()
+	cli = get_client()
+	rows = (cli.table("ocr_history").select("source_path")
+		.eq("user_id", uid).execute()).data or []
+	paths = [r["source_path"] for r in rows if r.get("source_path")]
+	storage.delete_objects(storage.OCR_BUCKET, paths)
+	cli.table("ocr_history").delete().eq("user_id", uid).execute()
+	return len(rows)
 
 
 # ============================================================
@@ -208,3 +250,14 @@ def list_shortages(limit: int = 50) -> List[dict]:
 
 def delete_shortage(short_id: str) -> None:
 	get_client().table("shortage_lists").delete().eq("id", short_id).execute()
+
+
+def delete_all_shortages() -> int:
+	"""清空当前用户的所有补货清单。返回删除的行数。"""
+	uid = current_user_id()
+	cli = get_client()
+	res = (cli.table("shortage_lists").select("id", count="exact")
+		.eq("user_id", uid).execute())
+	n = res.count or 0
+	cli.table("shortage_lists").delete().eq("user_id", uid).execute()
+	return n

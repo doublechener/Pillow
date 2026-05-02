@@ -38,6 +38,27 @@ def upload_ocr_source(image_bytes: bytes,
 	return _upload(OCR_BUCKET, image_bytes, suffix=suffix)
 
 
+def delete_object(bucket: str, path: Optional[str]) -> None:
+	"""从 Storage 删除单个文件。path 为空或删除失败都不抛异常(允许孤儿文件存在)。"""
+	if not path:
+		return
+	try:
+		get_client().storage.from_(bucket).remove([path])
+	except Exception:
+		pass
+
+
+def delete_objects(bucket: str, paths: list[str]) -> None:
+	"""批量删除 Storage 文件，失败不抛。"""
+	paths = [p for p in paths if p]
+	if not paths:
+		return
+	try:
+		get_client().storage.from_(bucket).remove(paths)
+	except Exception:
+		pass
+
+
 def signed_url(bucket: str, path: str, expires_in: int = 3600) -> str:
 	res = get_client().storage.from_(bucket).create_signed_url(
 		path, expires_in

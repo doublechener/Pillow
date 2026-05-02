@@ -638,70 +638,112 @@ with tab_history:
 	st.subheader("📚 历史记录")
 	hist_tabs = st.tabs(["🖼️ 我的图纸", "🔍 OCR 历史", "🛒 补货清单"])
 
+	# ===== 我的图纸 =====
 	with hist_tabs[0]:
 		pats = db.list_patterns(limit=100)
+		hc1, hc2 = st.columns([3, 1])
+		hc1.caption(f"共 {len(pats)} 张图纸")
+		confirm_pat = hc1.checkbox("我确认要清空所有图纸(含云端图片)",
+			key="confirm_clear_pat")
+		if hc2.button("🗑️ 清空全部", key="clear_all_pat",
+		              width="stretch", disabled=not confirm_pat):
+			n = db.delete_all_patterns()
+			st.success(f"✅ 已清空 {n} 张图纸(含云端图片)")
+			st.rerun()
+		st.divider()
 		if not pats:
 			st.info("还没有生成过图纸。")
 		for p in pats:
-			cols = st.columns([1,3,1])
+			cols = st.columns([1, 3, 1])
 			if p.get("image_path"):
 				try:
 					url = storage.signed_url(PATTERN_BUCKET, p["image_path"])
 					cols[0].image(url, width=120)
 				except Exception:
 					cols[0].caption("(图片不可用)")
-			cols[1].markdown(f"**{p['name']}** · {p['width_beads']}×{p['height_beads']}  \n"
+			cols[1].markdown(
+				f"**{p['name']}** · {p['width_beads']}×{p['height_beads']}  \n"
 				f"总豆 {p['total_beads']} · {p['color_count']} 色 · "
 				f"{p['created_at'][:19].replace('T',' ')}")
-			if cols[2].button("🗑️ 删除", key=f"del_pat_{p['id']}"):
+			if cols[2].button("🗑️ 删除", key=f"del_pat_{p['id']}",
+			                   width="stretch"):
 				db.delete_pattern(p["id"])
+				st.toast(f"已删除「{p['name']}」", icon="🗑️")
 				st.rerun()
 
+	# ===== OCR 历史 =====
 	with hist_tabs[1]:
 		ocrs = db.list_ocr_history(limit=100)
+		hc1, hc2 = st.columns([3, 1])
+		hc1.caption(f"共 {len(ocrs)} 条 OCR 识别记录")
+		confirm_ocr = hc1.checkbox("我确认要清空所有 OCR 历史(含云端原图)",
+			key="confirm_clear_ocr")
+		if hc2.button("🗑️ 清空全部", key="clear_all_ocr",
+		              width="stretch", disabled=not confirm_ocr):
+			n = db.delete_all_ocr()
+			st.success(f"✅ 已清空 {n} 条 OCR 历史(含云端原图)")
+			st.rerun()
+		st.divider()
 		if not ocrs:
 			st.info("还没有 OCR 识别记录。")
 		for o in ocrs:
-			with st.expander(
-				f"{o['created_at'][:19].replace('T',' ')} · "
-				f"{o['color_count']} 色 / {o['total_beads']} 颗 "
-				f"{'(已扣减)' if o['deducted'] else ''}"
-			):
+			cols = st.columns([4, 1])
+			tag = "✅ 已扣减" if o["deducted"] else "🟡 未扣减"
+			cols[0].markdown(
+				f"**{o['created_at'][:19].replace('T',' ')}** · "
+				f"{o['color_count']} 色 / {o['total_beads']} 颗 · {tag}")
+			if cols[1].button("🗑️ 删除", key=f"del_ocr_{o['id']}",
+			                   width="stretch"):
+				db.delete_ocr_record(o["id"])
+				st.toast("已删除 OCR 记录", icon="🗑️")
+				st.rerun()
+			with st.expander("📋 详情:原图 + 解析结果"):
 				if o.get("source_path"):
 					try:
-						url = storage.signed_url(OCR_BUCKET, o["source_path"])
+						url = storage.signed_url(OCR_BUCKET,
+						                          o["source_path"])
 						st.image(url, width=240)
 					except Exception:
 						pass
 				parsed_df = pd.DataFrame(
-					[{"色号":c, "数量":n}
-					 for c,n in sorted(o["parsed"].items(), key=lambda x:-x[1])])
+					[{"色号": c, "数量": n}
+					 for c, n in sorted(o["parsed"].items(),
+					                     key=lambda x: -x[1])])
 				st.dataframe(parsed_df, width="stretch", hide_index=True)
-				if st.button("🗑️ 删除此记录", key=f"del_ocr_{o['id']}"):
-					db.delete_ocr_record(o["id"])
-					st.rerun()
 
+	# ===== 补货清单 =====
 	with hist_tabs[2]:
 		shorts = db.list_shortages(limit=100)
+		hc1, hc2 = st.columns([3, 1])
+		hc1.caption(f"共 {len(shorts)} 条补货清单")
+		confirm_sho = hc1.checkbox("我确认要清空所有补货清单",
+			key="confirm_clear_sho")
+		if hc2.button("🗑️ 清空全部", key="clear_all_sho",
+		              width="stretch", disabled=not confirm_sho):
+			n = db.delete_all_shortages()
+			st.success(f"✅ 已清空 {n} 条补货清单")
+			st.rerun()
+		st.divider()
 		if not shorts:
 			st.info("还没有补货清单。")
 		for s in shorts:
-			with st.expander(
-				f"{s['created_at'][:19].replace('T',' ')} · "
-				f"{s['source']} · 缺 {s['total_shortage']} 颗"
-			):
-				df_s = pd.DataFrame(s["items"])
+			cols = st.columns([4, 1, 1])
+			cols[0].markdown(
+				f"**{s['created_at'][:19].replace('T',' ')}** · "
+				f"{s['source']} · 缺 {s['total_shortage']} 颗")
+			df_s = pd.DataFrame(s["items"])
+			cols[1].download_button("⬇️ CSV",
+				df_s.to_csv(index=False).encode("utf-8-sig"),
+				file_name=f"shortage_{s['id'][:8]}.csv",
+				mime="text/csv", key=f"dl_sho_{s['id']}",
+				width="stretch")
+			if cols[2].button("🗑️ 删除", key=f"del_sho_{s['id']}",
+			                   width="stretch"):
+				db.delete_shortage(s["id"])
+				st.toast("已删除补货清单", icon="🗑️")
+				st.rerun()
+			with st.expander("📋 详情:缺货明细"):
 				st.dataframe(df_s, width="stretch", hide_index=True)
-				cc1,cc2 = st.columns(2)
-				cc1.download_button("⬇️ 下载 CSV",
-					df_s.to_csv(index=False).encode("utf-8-sig"),
-					file_name=f"shortage_{s['id'][:8]}.csv",
-					mime="text/csv", key=f"dl_sho_{s['id']}",
-					width="stretch")
-				if cc2.button("🗑️ 删除", key=f"del_sho_{s['id']}",
-				              width="stretch"):
-					db.delete_shortage(s["id"])
-					st.rerun()
 
 # ---------- Tab 5: 色板 ----------
 with tab_palette:
