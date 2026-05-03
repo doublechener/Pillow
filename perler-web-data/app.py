@@ -150,6 +150,50 @@ def _swatch(rgb, size=32):
 	return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
+# ============================================================
+# 库存自动保存回调(色板模式 / 表格模式各一个)
+# ============================================================
+def _autosave_palette(code: str, original: int) -> None:
+	"""色板模式:某个色号被改 → 立刻 upsert 到云端。"""
+	new_val = int(st.session_state.get(f"pal_{code}", original))
+	if new_val == original:
+		return
+	try:
+		db.save_inventory({code: new_val})
+		st.toast(f"💾 {code}: {original} → {new_val}", icon="✅")
+	except Exception as e:
+		st.toast(f"❌ {code} 保存失败: {e}", icon="⚠️")
+
+
+def _autosave_table(original_inv: dict) -> None:
+	"""表格模式:data_editor 任何「库存」变更 → 把 diff upsert 到云端。"""
+	state = st.session_state.get("inv_editor", {})
+	edited = state.get("edited_rows", {}) if isinstance(state, dict) else {}
+	code_list = st.session_state.get("inv_editor_codes", [])
+	if not edited or not code_list:
+		return
+	updates: dict[str, int] = {}
+	for row_idx, changes in edited.items():
+		if "库存" not in changes:
+			continue
+		try:
+			ridx = int(row_idx)
+		except (TypeError, ValueError):
+			continue
+		if ridx >= len(code_list):
+			continue
+		code = code_list[ridx]
+		new_val = max(0, int(changes["库存"] or 0))
+		if new_val != int(original_inv.get(code, 0)):
+			updates[code] = new_val
+	if updates:
+		try:
+			db.save_inventory(updates)
+			st.toast(f"💾 已保存 {len(updates)} 个色号修改", icon="✅")
+		except Exception as e:
+			st.toast(f"❌ 保存失败: {e}", icon="⚠️")
+
+
 SERIES_LABELS = {
 	"A":"黄橙暖色","B":"绿色","C":"蓝青色","D":"紫蓝色",
 	"E":"粉色","F":"红色","G":"棕肤色","H":"黑白灰","M":"莫兰迪",
@@ -353,33 +397,27 @@ elif page == PAGES["inv"]:
 		df = pd.DataFrame(rows)
 		if df.empty:
 			st.info("当前筛选条件下没有色号。")
-			edited = df
 		else:
-			st.caption(f"显示 {len(df)} 个色号 · 双击「库存」修改,然后点「保存修改」")
-			edited = st.data_editor(df, width="stretch", height=520, hide_index=True,
+			st.caption(f"显示 {len(df)} 个色号 · ✨ 双击「库存」修改,改完即自动保存到云端")
+			# 把当前展示的色号顺序存起来,on_change 回调按 row_idx 反查
+			st.session_state["inv_editor_codes"] = [r["色号"] for r in rows]
+			st.data_editor(df, width="stretch", height=520, hide_index=True,
 				column_config={
 					"色块": st.column_config.ImageColumn("色块", width="small"),
 					"库存": st.column_config.NumberColumn("库存 (颗)",
 						min_value=0, step=1, format="%d"),
 				},
 				disabled=["色块","色号","系列","RGB","状态"],
-				key="inv_editor")
+				key="inv_editor",
+				on_change=_autosave_table, args=(dict(inv),))
 		st.divider()
-		b1,b2,b3 = st.columns(3)
-		if b1.button("💾 保存修改", type="primary", width="stretch",
-		             key="tbl_save"):
-			if not df.empty:
-				updates = {row["色号"]: int(row["库存"] or 0)
-				           for _, row in edited.iterrows()}
-				db.save_inventory(updates)
-				st.success(f"✅ 已写入云端({len(updates)} 个色号)")
-				st.rerun()
+		b1, b2 = st.columns(2)
 		full_csv = pd.DataFrame([{"色号":k,"库存":v} for k,v in inv.items()]
 			).to_csv(index=False).encode("utf-8-sig")
-		b2.download_button("⬇️ 导出全部 CSV", full_csv,
+		b1.download_button("⬇️ 导出全部 CSV", full_csv,
 			file_name="inventory.csv", mime="text/csv", width="stretch",
 			key="tbl_export")
-		up_csv = b3.file_uploader("📤 导入 CSV(覆盖整个库存)", type="csv",
+		up_csv = b2.file_uploader("📤 导入 CSV(覆盖整个库存)", type="csv",
 			label_visibility="collapsed", key="tbl_import")
 		if up_csv:
 			new_df = pd.read_csv(up_csv)
@@ -393,7 +431,7 @@ elif page == PAGES["inv"]:
 		# ====== 色板模式 ======
 		st.caption("🎨 按 MARD 色板布局编辑库存。每个色块上方为色号(文字色随明度自动黑白),"
 		           "下方直接修改颗数;右上小圆点 🔴 缺货 / 🟡 1–49 / 🟢 ≥50;"
-		           "修改后点底部「💾 保存色板修改」一次性提交。")
+		           "✨ 改完按 Enter / 点别处即自动保存,无需点按钮。")
 		pf1, pf2 = st.columns([3, 2])
 		pal_series = pf1.multiselect("系列筛选", all_series, default=all_series,
 			format_func=lambda s: f"{s} · {SERIES_LABELS.get(s,'')}",
@@ -404,82 +442,66 @@ elif page == PAGES["inv"]:
 		cols_per_row = 8
 		rendered_codes: list[str] = []
 
-		with st.form("palette_inv_form", border=False):
-			for series in sorted(pal_series):
-				series_codes = [c for c in inv if c[0] == series]
-				if pal_status == "有库存":
-					series_codes = [c for c in series_codes if inv[c] > 0]
-				elif pal_status == "缺货":
-					series_codes = [c for c in series_codes if inv[c] <= 0]
-				if not series_codes:
-					continue
-				series_total = sum(inv[c] for c in series_codes)
-				st.markdown(
-					f"<div style='margin:18px 0 10px;padding:10px 16px;"
-					f"background:linear-gradient(90deg,rgba(255,182,217,.18),"
-					f"rgba(168,218,255,.18));border-radius:12px;"
-					f"border:1px solid rgba(255,182,217,.3);'>"
-					f"<b style='font-size:15px;'>{series} · "
-					f"{SERIES_LABELS.get(series, '')}</b>"
-					f"<span style='font-size:12px;color:#7A7A9A;margin-left:10px;'>"
-					f"{len(series_codes)} 色 · 共 {series_total:,} 颗</span></div>",
-					unsafe_allow_html=True)
-				for i in range(0, len(series_codes), cols_per_row):
-					row = st.columns(cols_per_row)
-					for j, code in enumerate(series_codes[i:i + cols_per_row]):
-						r, g, b = MARD_PALETTE[code]
-						lum = 0.299 * r + 0.587 * g + 0.114 * b
-						text_color = "#1a1a2e" if lum > 140 else "#ffffff"
-						stock = int(inv.get(code, 0))
-						dot = ("#FF6B9D" if stock == 0
-						       else "#FFE9A8" if stock < 50
-						       else "#7ED6A0")
-						with row[j]:
-							st.markdown(
-								f'<div style="background:rgb({r},{g},{b});'
-								f'color:{text_color};'
-								f'border:1.5px solid rgba(0,0,0,.12);'
-								f'border-radius:10px 10px 0 0;border-bottom:none;'
-								f'padding:14px 4px 10px;text-align:center;'
-								f'font-weight:800;font-size:14px;letter-spacing:.5px;'
-								f'position:relative;text-shadow:0 1px 2px rgba(0,0,0,.08);">'
-								f'{code}'
-								f'<div style="position:absolute;top:6px;right:6px;'
-								f'width:9px;height:9px;border-radius:50%;'
-								f'background:{dot};'
-								f'box-shadow:0 0 0 2px rgba(255,255,255,.7);">'
-								f'</div></div>',
-								unsafe_allow_html=True)
-							st.number_input(
-								label=code, label_visibility="collapsed",
-								min_value=0, step=1, value=stock,
-								key=f"pal_{code}")
-							rendered_codes.append(code)
+		# 不再用 st.form —— 每个 number_input 自带 on_change,改完一格立刻 upsert
+		for series in sorted(pal_series):
+			series_codes = [c for c in inv if c[0] == series]
+			if pal_status == "有库存":
+				series_codes = [c for c in series_codes if inv[c] > 0]
+			elif pal_status == "缺货":
+				series_codes = [c for c in series_codes if inv[c] <= 0]
+			if not series_codes:
+				continue
+			series_total = sum(inv[c] for c in series_codes)
+			st.markdown(
+				f"<div style='margin:18px 0 10px;padding:10px 16px;"
+				f"background:linear-gradient(90deg,rgba(255,182,217,.18),"
+				f"rgba(168,218,255,.18));border-radius:12px;"
+				f"border:1px solid rgba(255,182,217,.3);'>"
+				f"<b style='font-size:15px;'>{series} · "
+				f"{SERIES_LABELS.get(series, '')}</b>"
+				f"<span style='font-size:12px;color:#7A7A9A;margin-left:10px;'>"
+				f"{len(series_codes)} 色 · 共 {series_total:,} 颗</span></div>",
+				unsafe_allow_html=True)
+			for i in range(0, len(series_codes), cols_per_row):
+				row = st.columns(cols_per_row)
+				for j, code in enumerate(series_codes[i:i + cols_per_row]):
+					r, g, b = MARD_PALETTE[code]
+					lum = 0.299 * r + 0.587 * g + 0.114 * b
+					text_color = "#1a1a2e" if lum > 140 else "#ffffff"
+					stock = int(inv.get(code, 0))
+					dot = ("#FF6B9D" if stock == 0
+					       else "#FFE9A8" if stock < 50
+					       else "#7ED6A0")
+					with row[j]:
+						st.markdown(
+							f'<div style="background:rgb({r},{g},{b});'
+							f'color:{text_color};'
+							f'border:1.5px solid rgba(0,0,0,.12);'
+							f'border-radius:10px 10px 0 0;border-bottom:none;'
+							f'padding:14px 4px 10px;text-align:center;'
+							f'font-weight:800;font-size:14px;letter-spacing:.5px;'
+							f'position:relative;text-shadow:0 1px 2px rgba(0,0,0,.08);">'
+							f'{code}'
+							f'<div style="position:absolute;top:6px;right:6px;'
+							f'width:9px;height:9px;border-radius:50%;'
+							f'background:{dot};'
+							f'box-shadow:0 0 0 2px rgba(255,255,255,.7);">'
+							f'</div></div>',
+							unsafe_allow_html=True)
+						st.number_input(
+							label=code, label_visibility="collapsed",
+							min_value=0, step=1, value=stock,
+							key=f"pal_{code}",
+							on_change=_autosave_palette,
+							args=(code, stock))
+						rendered_codes.append(code)
 
-			if not rendered_codes:
-				st.info("当前筛选条件下没有色号。")
+		if not rendered_codes:
+			st.info("当前筛选条件下没有色号。")
+		else:
 			st.divider()
-			sf1, sf2 = st.columns([3, 1])
-			sf1.caption(f"当前可编辑 **{len(rendered_codes)}** 个色号 · "
-			            "修改后点右侧按钮一次性提交")
-			submitted = sf2.form_submit_button("💾 保存色板修改",
-				type="primary", width="stretch",
-				disabled=not rendered_codes)
-
-		if submitted:
-			updates = {}
-			for code in rendered_codes:
-				key = f"pal_{code}"
-				if key in st.session_state:
-					new_val = int(st.session_state[key])
-					if new_val != int(inv.get(code, 0)):
-						updates[code] = new_val
-			if updates:
-				db.save_inventory(updates)
-				st.success(f"✅ 已写入云端({len(updates)} 个色号有变化)")
-				st.rerun()
-			else:
-				st.info("ℹ️ 没有需要保存的修改")
+			st.caption(f"✨ 共 {len(rendered_codes)} 个色号 · "
+			           "改完颗数立即自动保存,无需手动点按钮")
 
 	# ---- 各系列概览 ----
 	with st.expander("📊 各系列库存概览", expanded=False):
