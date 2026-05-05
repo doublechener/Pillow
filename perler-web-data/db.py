@@ -183,6 +183,18 @@ def mark_ocr_deducted(ocr_id: str) -> None:
 	}).eq("id", ocr_id).execute()
 
 
+def update_ocr_parsed(ocr_id: str, parsed: Dict[str, int]) -> None:
+	"""更新一条 OCR 历史的 parsed 字段(供识别结果增删改实时落库)。
+
+	同步刷新 total_beads / color_count，保证「历史记录」tab 显示一致。
+	"""
+	get_client().table("ocr_history").update({
+		"parsed": parsed,
+		"total_beads": int(sum(parsed.values())),
+		"color_count": len(parsed),
+	}).eq("id", ocr_id).execute()
+
+
 def list_ocr_history(limit: int = 50) -> List[dict]:
 	return (
 		get_client()
