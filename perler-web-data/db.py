@@ -86,6 +86,69 @@ def last_updated() -> Optional[str]:
 
 
 # ============================================================
+# 库存预警阈值（默认 + 单色覆盖，持久化到 Supabase）
+# ============================================================
+DEFAULT_LOW = 200
+DEFAULT_MID = 500
+
+
+def load_thresholds() -> Dict[str, tuple]:
+	"""返回 {'': (default_low, default_mid), 'A5': (l, m), ...}。
+
+	未设置过任何阈值时返回 {'': (200, 500)}（带兜底默认）。
+	"""
+	rows = (
+		get_client()
+		.table("warning_thresholds")
+		.select("code, low, mid")
+		.execute()
+	).data or []
+	result: Dict[str, tuple] = {}
+	for r in rows:
+		code = r.get("code") or ""
+		result[code] = (int(r["low"]), int(r["mid"]))
+	if "" not in result:
+		result[""] = (DEFAULT_LOW, DEFAULT_MID)
+	return result
+
+
+def save_threshold(code: str, low: int, mid: int) -> None:
+	"""upsert 一条阈值。code='' 代表全局默认；否则为具体色号覆盖。"""
+	uid = current_user_id()
+	if not uid:
+		return
+	if int(low) >= int(mid):
+		raise ValueError("low must be less than mid")
+	get_client().table("warning_thresholds").upsert({
+		"user_id": uid,
+		"code": code,
+		"low": int(low),
+		"mid": int(mid),
+		"updated_at": datetime.utcnow().isoformat(),
+	}, on_conflict="user_id,code").execute()
+
+
+def delete_threshold(code: str) -> None:
+	"""删除一条单色覆盖；不允许删全局默认（code='' 会被忽略）。"""
+	if not code:
+		return
+	uid = current_user_id()
+	if not uid:
+		return
+	(get_client().table("warning_thresholds")
+		.delete()
+		.eq("user_id", uid)
+		.eq("code", code)
+		.execute())
+
+
+def threshold_for(code: str, thresholds: Dict[str, tuple]) -> tuple:
+	"""取一个色号的有效阈值：先看单色覆盖，否则用全局默认。"""
+	return thresholds.get(code) or thresholds.get(
+		"", (DEFAULT_LOW, DEFAULT_MID))
+
+
+# ============================================================
 # 图纸历史
 # ============================================================
 def insert_pattern(

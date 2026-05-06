@@ -491,17 +491,132 @@ if page == PAGES["gen"]:
 elif page == PAGES["inv"]:
 	inv = db.load_inventory()
 	last_ts = db.last_updated()
-	total_colors = len(inv)
-	in_stock = sum(1 for v in inv.values() if v > 0)
-	oos = total_colors - in_stock
+	thresholds = db.load_thresholds()  # {'': (lo, mi), 'A5': (lo, mi), ...}
+	DEF_LOW, DEF_MID = thresholds.get("", (db.DEFAULT_LOW, db.DEFAULT_MID))
+
+	def _thr_of(code: str) -> tuple:
+		return thresholds.get(code) or (DEF_LOW, DEF_MID)
+
+	def _tier(code: str, qty: int) -> str:
+		lo, mi = _thr_of(code)
+		if qty < lo: return "🔴 紧缺"
+		if qty < mi: return "🟡 偏低"
+		return "🟢 充足"
+
+	with st.expander("⚙️ 预警区间设置（持久保存到云端）",
+	                 expanded=False):
+		t_def, t_per = st.tabs(["🌐 默认阈值（全局）", "🎯 单色阈值（覆盖默认）"])
+
+		with t_def:
+			dc1, dc2 = st.columns(2)
+			low_in = dc1.number_input(
+				"🔴 紧缺阈值（低于该值为红色）",
+				min_value=1, step=10, value=int(DEF_LOW),
+				key="warn_low_input",
+				help="低于此颗数 ➜ 🔴 紧缺")
+			mid_in = dc2.number_input(
+				"🟢 充足阈值（≥ 该值为绿色）",
+				min_value=2, step=10, value=int(DEF_MID),
+				key="warn_mid_input",
+				help="高于或等于此颗数 ➜ 🟢 充足；介于两者之间 ➜ 🟡 偏低")
+			db1, db2 = st.columns([1, 4])
+			if db1.button("💾 保存默认", type="primary",
+			              width="stretch", key="save_def_thr"):
+				if low_in >= mid_in:
+					st.error("⚠️ 紧缺阈值必须 < 充足阈值")
+				else:
+					try:
+						db.save_threshold("", int(low_in), int(mid_in))
+						st.success(
+							f"✅ 已保存：🔴 < {low_in} · "
+							f"🟡 {low_in}–{mid_in - 1} · 🟢 ≥ {mid_in}")
+						st.rerun()
+					except Exception as e:
+						st.error(f"保存失败：{e}")
+			db2.caption(
+				f"当前默认：🔴 < {DEF_LOW} · "
+				f"🟡 {DEF_LOW}–{DEF_MID - 1} · 🟢 ≥ {DEF_MID}"
+				" · 此设置持久保存到云端，所有设备共享")
+
+		with t_per:
+			st.caption("可以为指定色号设置不同的紧缺/充足阈值（例如热门色用更高的红线）。"
+			           "未设置覆盖的色号会使用「默认阈值」。")
+			overrides = sorted(
+				[(c, l, m) for c, (l, m) in thresholds.items() if c])
+			if overrides:
+				ov_df = pd.DataFrame([{
+					"色号": c,
+					"🔴 紧缺 <": l,
+					"🟡 偏低区间": f"{l}–{m - 1}",
+					"🟢 充足 ≥": m,
+				} for c, l, m in overrides])
+				st.dataframe(ov_df, width="stretch", hide_index=True,
+				             height=min(360, 40 + 35 * len(overrides)))
+				drc1, drc2 = st.columns([3, 1])
+				del_code = drc1.selectbox(
+					"恢复某色号到默认",
+					options=[""] + [c for c, _, _ in overrides],
+					format_func=lambda x: "（请选择）" if not x else x,
+					key="del_thr_code")
+				drc2.write("")
+				if drc2.button("🗑️ 移除覆盖", width="stretch",
+				               key="del_thr_btn", disabled=not del_code):
+					try:
+						db.delete_threshold(del_code)
+						st.success(f"✅ 已移除 {del_code} 的覆盖，恢复默认")
+						st.rerun()
+					except Exception as e:
+						st.error(f"移除失败：{e}")
+			else:
+				st.info("还没有任何单色覆盖。在下方添加第一个 ✨")
+
+			st.divider()
+			st.markdown("**➕ 新增 / 修改单色阈值**")
+			ac1, ac2, ac3, ac4 = st.columns([2, 1, 1, 1])
+			new_code = ac1.selectbox("色号",
+				list(MARD_PALETTE.keys()),
+				key="new_thr_code")
+			cur_lo, cur_mi = thresholds.get(new_code, (DEF_LOW, DEF_MID))
+			new_low = ac2.number_input("🔴 紧缺 <",
+				min_value=1, step=10, value=int(cur_lo),
+				key=f"new_thr_low_{new_code}")
+			new_mid = ac3.number_input("🟢 充足 ≥",
+				min_value=2, step=10, value=int(cur_mi),
+				key=f"new_thr_mid_{new_code}")
+			ac4.write("")
+			ac4.write("")
+			if ac4.button("💾 保存", type="primary",
+			              width="stretch", key="save_thr_btn"):
+				if new_low >= new_mid:
+					st.error("⚠️ 紧缺阈值必须 < 充足阈值")
+				else:
+					try:
+						db.save_threshold(
+							new_code, int(new_low), int(new_mid))
+						st.success(
+							f"✅ 已保存 {new_code}："
+							f"🔴 < {new_low} · 🟢 ≥ {new_mid}")
+						st.rerun()
+					except Exception as e:
+						st.error(f"保存失败：{e}")
+
+	# 顶部统计：每个色号按各自有效阈值分级
+	n_low = sum(1 for c, v in inv.items() if v < _thr_of(c)[0])
+	n_mid = sum(1 for c, v in inv.items()
+	            if _thr_of(c)[0] <= v < _thr_of(c)[1])
+	n_high = len(inv) - n_low - n_mid
 	total_beads = sum(inv.values())
-	coverage = in_stock * 100 // total_colors if total_colors else 0
-	m1,m2,m3,m4 = st.columns(4)
-	m1.metric("🎨 总色号", total_colors)
-	m2.metric("✅ 有库存", f"{in_stock}", f"覆盖 {coverage}%")
-	m3.metric("❌ 缺货色号", oos,
-		delta=None if oos==0 else f"-{oos}", delta_color="inverse")
-	m4.metric("📦 库存总颗数", f"{total_beads:,}")
+	override_cnt = sum(1 for c in thresholds if c)
+	m1, m2, m3, m4, m5 = st.columns(5)
+	m1.metric("🎨 总色号", len(inv),
+		f"⭐ {override_cnt} 个自定义" if override_cnt else None,
+		delta_color="off")
+	m2.metric("🟢 充足", n_high)
+	m3.metric("🟡 偏低", n_mid)
+	m4.metric("🔴 紧缺", n_low,
+		delta=None if n_low == 0 else f"-{n_low}",
+		delta_color="inverse")
+	m5.metric("📦 总颗数", f"{total_beads:,}")
 	if last_ts:
 		st.caption(f"🕒 最近更新: {last_ts}")
 	st.divider()
@@ -518,7 +633,8 @@ elif page == PAGES["inv"]:
 		series_filter = f1.multiselect("系列筛选", all_series, default=all_series,
 			format_func=lambda s: f"{s} · {SERIES_LABELS.get(s,'')}",
 			key="tbl_series_filter")
-		status_filter = f2.radio("状态", ["全部","有库存","缺货"],
+		status_filter = f2.radio("状态",
+			["全部", "🟢 充足", "🟡 偏低", "🔴 紧缺"],
 			horizontal=True, key="tbl_status_filter")
 		search_text = f3.text_input("🔍 搜索色号", placeholder="例如 A12、H7",
 			key="tbl_search")
@@ -526,13 +642,16 @@ elif page == PAGES["inv"]:
 		rows = []
 		for code, stock in inv.items():
 			if code[0] not in series_filter: continue
-			if status_filter == "有库存" and stock <= 0: continue
-			if status_filter == "缺货" and stock > 0: continue
+			tier = _tier(code, stock)
+			if status_filter != "全部" and tier != status_filter: continue
 			if search_text and search_text.strip().upper() not in code.upper(): continue
 			r,g,b = MARD_PALETTE.get(code, (200,200,200))
+			lo, mi = _thr_of(code)
+			has_ov = code in thresholds
 			rows.append({"色块":_swatch((r,g,b)), "色号":code, "系列":code[0],
 			             "RGB":f"({r}, {g}, {b})", "库存":int(stock),
-			             "状态":"✅ 有货" if stock>0 else "❌ 缺货"})
+			             "阈值": f"<{lo} / ≥{mi}" + (" ⭐" if has_ov else ""),
+			             "状态": tier})
 		df = pd.DataFrame(rows)
 		if df.empty:
 			st.info("当前筛选条件下没有色号。")
@@ -546,7 +665,7 @@ elif page == PAGES["inv"]:
 					"库存": st.column_config.NumberColumn("库存 (颗)",
 						min_value=0, step=1, format="%d"),
 				},
-				disabled=["色块","色号","系列","RGB","状态"],
+				disabled=["色块","色号","系列","RGB","阈值","状态"],
 				key="inv_editor",
 				on_change=_autosave_table, args=(dict(inv),))
 		st.divider()
@@ -569,13 +688,15 @@ elif page == PAGES["inv"]:
 	else:
 		# ====== 色板模式 ======
 		st.caption("🎨 按 MARD 色板布局编辑库存。每个色块上方为色号(文字色随明度自动黑白),"
-		           "下方直接修改颗数;右上小圆点 🔴 缺货 / 🟡 1–49 / 🟢 ≥50;"
+		           "下方直接修改颗数;右上小圆点 🔴 紧缺 / 🟡 偏低 / 🟢 充足"
+		           "（按该色阈值，左上 ⭐ 表示已自定义）;"
 		           "✨ 改完按 Enter / 点别处即自动保存,无需点按钮。")
 		pf1, pf2 = st.columns([3, 2])
 		pal_series = pf1.multiselect("系列筛选", all_series, default=all_series,
 			format_func=lambda s: f"{s} · {SERIES_LABELS.get(s,'')}",
 			key="pal_series_filter")
-		pal_status = pf2.radio("状态", ["全部", "有库存", "缺货"],
+		pal_status = pf2.radio("状态",
+			["全部", "🟢 充足", "🟡 偏低", "🔴 紧缺"],
 			horizontal=True, key="pal_status_filter")
 
 		cols_per_row = 8
@@ -584,10 +705,9 @@ elif page == PAGES["inv"]:
 		# 不再用 st.form —— 每个 number_input 自带 on_change,改完一格立刻 upsert
 		for series in sorted(pal_series):
 			series_codes = [c for c in inv if c[0] == series]
-			if pal_status == "有库存":
-				series_codes = [c for c in series_codes if inv[c] > 0]
-			elif pal_status == "缺货":
-				series_codes = [c for c in series_codes if inv[c] <= 0]
+			if pal_status != "全部":
+				series_codes = [c for c in series_codes
+				                if _tier(c, inv[c]) == pal_status]
 			if not series_codes:
 				continue
 			series_total = sum(inv[c] for c in series_codes)
@@ -608,9 +728,15 @@ elif page == PAGES["inv"]:
 					lum = 0.299 * r + 0.587 * g + 0.114 * b
 					text_color = "#1a1a2e" if lum > 140 else "#ffffff"
 					stock = int(inv.get(code, 0))
-					dot = ("#FF6B9D" if stock == 0
-					       else "#FFE9A8" if stock < 50
+					_lo, _mi = _thr_of(code)
+					dot = ("#FF6B9D" if stock < _lo
+					       else "#FFE9A8" if stock < _mi
 					       else "#7ED6A0")
+					has_ov = code in thresholds
+					ov_html = ('<div style="position:absolute;top:3px;left:6px;'
+					           'font-size:11px;line-height:1;'
+					           'filter:drop-shadow(0 1px 2px rgba(0,0,0,.4));">⭐</div>'
+					           if has_ov else '')
 					with row[j]:
 						st.markdown(
 							f'<div style="background:rgb({r},{g},{b});'
@@ -620,7 +746,7 @@ elif page == PAGES["inv"]:
 							f'padding:14px 4px 10px;text-align:center;'
 							f'font-weight:800;font-size:14px;letter-spacing:.5px;'
 							f'position:relative;text-shadow:0 1px 2px rgba(0,0,0,.08);">'
-							f'{code}'
+							f'{code}{ov_html}'
 							f'<div style="position:absolute;top:6px;right:6px;'
 							f'width:9px;height:9px;border-radius:50%;'
 							f'background:{dot};'
