@@ -154,12 +154,15 @@ def _swatch(rgb, size=32):
 # 库存自动保存回调(色板模式 / 表格模式各一个)
 # ============================================================
 def _autosave_palette(code: str, original: int) -> None:
-	"""色板模式:某个色号被改 → 立刻 upsert 到云端。"""
+	"""色板模式:某个色号被改 → 写一条历史并 upsert 到云端。"""
 	new_val = int(st.session_state.get(f"pal_{code}", original))
 	if new_val == original:
 		return
 	try:
-		db.save_inventory({code: new_val})
+		db.apply_inventory_delta(
+			{code: new_val - original},
+			source="manual_edit",
+			note=f"色板模式:{code} {original} → {new_val}")
 		st.toast(f"💾 {code}: {original} → {new_val}", icon="✅")
 	except Exception as e:
 		st.toast(f"❌ {code} 保存失败: {e}", icon="⚠️")
@@ -188,7 +191,10 @@ def _autosave_table(original_inv: dict) -> None:
 			updates[code] = new_val
 	if updates:
 		try:
-			db.save_inventory(updates)
+			db.apply_inventory_absolute(
+				updates,
+				source="manual_edit",
+				note=f"表格模式:{len(updates)} 个色号修改")
 			st.toast(f"💾 已保存 {len(updates)} 个色号修改", icon="✅")
 		except Exception as e:
 			st.toast(f"❌ 保存失败: {e}", icon="⚠️")
@@ -502,6 +508,141 @@ elif page == PAGES["inv"]:
 		if qty < lo: return "🔴 紧缺"
 		if qty < mi: return "🟡 偏低"
 		return "🟢 充足"
+
+	# ============================================================
+	# 📥 增量入库:新买的豆子直接累加(不覆盖现有库存)
+	# ============================================================
+	with st.expander("📥 增量入库(新买的豆子 → 一键累加到现有库存)",
+	                 expanded=False):
+		st.caption(
+			"在表格里选择色号 + 填新增颗数,点「累加到库存」后会把新增量"
+			"**叠加**到当前库存(不是覆盖),并自动写一条「📥 增量入库」"
+			"历史,后悔了可以在下方「📜 变更历史」里一键撤回。")
+		if "restock_rows" not in st.session_state:
+			st.session_state["restock_rows"] = pd.DataFrame(
+				[{"色号": "", "新增颗数": 0} for _ in range(3)],
+				columns=["色号", "新增颗数"])
+		edited_rs = st.data_editor(
+			st.session_state["restock_rows"],
+			width="stretch", hide_index=True, num_rows="dynamic",
+			column_config={
+				"色号": st.column_config.SelectboxColumn(
+					"色号", options=[""] + list(MARD_PALETTE.keys()),
+					required=False, width="small"),
+				"新增颗数": st.column_config.NumberColumn(
+					"新增颗数", min_value=0, step=10, format="%d",
+					width="medium"),
+			},
+			key="restock_editor")
+		st.session_state["restock_rows"] = edited_rs
+		rs_note = st.text_input(
+			"备注(可选)",
+			placeholder="例如:1688 入 5000 颗混色包",
+			key="restock_note")
+		rsc1, rsc2 = st.columns([1, 4])
+		if rsc1.button("✨ 累加到库存", type="primary",
+		               width="stretch", key="restock_submit"):
+			deltas: dict[str, int] = {}
+			for _, r in edited_rs.iterrows():
+				code = str(r.get("色号") or "").upper().strip()
+				try:
+					qty = int(r.get("新增颗数") or 0)
+				except (TypeError, ValueError):
+					qty = 0
+				if qty > 0 and code in MARD_PALETTE:
+					deltas[code] = deltas.get(code, 0) + qty
+			if not deltas:
+				st.warning("⚠️ 还没有任何有效的「色号 + 颗数」可累加")
+			else:
+				hid = db.apply_inventory_delta(
+					deltas, source="restock",
+					note=rs_note or None)
+				total = sum(deltas.values())
+				st.success(
+					f"✅ 已为 {len(deltas)} 个色号累加共 {total:,} 颗"
+					f"(历史 ID: {hid[:8] if hid else '—'})")
+				st.session_state["restock_rows"] = pd.DataFrame(
+					[{"色号": "", "新增颗数": 0} for _ in range(3)],
+					columns=["色号", "新增颗数"])
+				st.rerun()
+		rsc2.caption(
+			"💡 可一次填多行,例如「A5 +500、H7 +300、F8 +200」"
+			"一次提交一条历史。")
+
+	# ============================================================
+	# 📜 库存变更历史 + 一键撤回
+	# ============================================================
+	with st.expander("📜 库存变更历史(增删改全留痕 · 一键撤回)",
+	                 expanded=False):
+		st.caption(
+			"记录每一次库存增删改,最近的在最上面。点「↩️ 撤回」可将本条"
+			"变更还原(撤回本身也会写一条记录)。")
+		hc1, hc2, hc3 = st.columns([3, 2, 1])
+		src_filter = hc1.multiselect(
+			"筛选来源",
+			list(db.SOURCE_LABELS.keys()),
+			default=list(db.SOURCE_LABELS.keys()),
+			format_func=lambda s: db.SOURCE_LABELS.get(s, s),
+			key="inv_hist_src")
+		show_reverted = hc2.checkbox(
+			"显示已撤回的记录", value=False, key="inv_hist_showrev")
+		hc3.write("")
+		if hc3.button("🧹 清空历史", key="inv_hist_clear",
+		              help="删除全部历史记录(不影响当前库存),不可恢复"):
+			n = db.delete_all_inventory_history()
+			st.toast(f"🧹 已清空 {n} 条历史", icon="✅")
+			st.rerun()
+
+		history = db.list_inventory_history(limit=200)
+		history = [h for h in history if h["source"] in src_filter]
+		if not show_reverted:
+			history = [h for h in history if not h.get("reverted")]
+
+		if not history:
+			st.info("还没有任何变更记录 ✨")
+		else:
+			st.caption(f"共 {len(history)} 条记录")
+			for h in history:
+				chs = h.get("changes") or []
+				n_codes = len(chs)
+				total_delta = sum(int(c["delta"]) for c in chs)
+				is_rev = bool(h.get("reverted"))
+				is_undo = h["source"] == "undo"
+				ts = str(h["created_at"])[:19].replace("T", " ")
+				label_src = db.SOURCE_LABELS.get(h["source"], h["source"])
+				sign = "+" if total_delta >= 0 else ""
+				title = (
+					f"{label_src} · {ts} · {n_codes} 色 · "
+					f"{sign}{total_delta:,} 颗"
+					+ ("  · 🚫 已撤回" if is_rev else ""))
+				with st.expander(title, expanded=False):
+					if h.get("note"):
+						st.caption(f"📝 备注:{h['note']}")
+					df_h = pd.DataFrame([{
+						"色号": c["code"],
+						"原库存": c["before"],
+						"改后库存": c["after"],
+						"变动": f"{'+' if c['delta'] >= 0 else ''}{c['delta']}",
+					} for c in chs])
+					st.dataframe(df_h, width="stretch", hide_index=True,
+					             height=min(280, 40 + 35 * len(chs)))
+					uc1, uc2 = st.columns([1, 5])
+					disabled = is_rev or is_undo
+					if uc1.button("↩️ 撤回此变更",
+					              key=f"undo_{h['id']}",
+					              disabled=disabled,
+					              width="stretch"):
+						new_id = db.undo_inventory_change(h["id"])
+						if new_id:
+							st.success(f"✅ 已撤回(新记录 {new_id[:8]})")
+							st.rerun()
+						else:
+							st.warning("该记录已撤回过或不可撤回")
+					if is_rev:
+						uc2.caption("此变更已被撤回,无法再次撤回。")
+					elif is_undo:
+						uc2.caption("「撤回操作」自身不支持再次撤回;"
+						            "如需还原,新建一次入库 / 手改覆盖即可。")
 
 	with st.expander("⚙️ 预警区间设置（持久保存到云端）",
 	                 expanded=False):
@@ -1394,7 +1535,7 @@ elif page == PAGES["recognize"]:
 			             width="stretch", key="ocr_deduct",
 			             disabled=not items):
 				updates = {c: max(0, inv_now.get(c, 0) - n) for c, n in items}
-				db.save_inventory(updates)
+				db.apply_inventory_absolute(updates, source="ocr_deduct", ref_id=ocr_id, note=f"OCR 一键扣减({len(updates)} 色)")
 				if ocr_id:
 					db.mark_ocr_deducted(ocr_id)
 				st.success(f"✅ 已扣减 {len(updates)} 个色号" + (
@@ -1548,7 +1689,7 @@ elif page == PAGES["recognize"]:
 			if d2.button("➖ 从库存中扣减", type="primary",
 			             width="stretch", key="rec_deduct"):
 				updates = {c: max(0, inv_now.get(c,0)-n) for c,n in items}
-				db.save_inventory(updates)
+				db.apply_inventory_absolute(updates, source="csv_import", replace_all_mode=True, note=f"CSV 整库导入({len(updates)} 色)")
 				if rec_id:
 					db.mark_ocr_deducted(rec_id)
 				st.success(f"✅ 已扣减 {len(updates)} 个色号" + (

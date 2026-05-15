@@ -336,3 +336,158 @@ def delete_all_shortages() -> int:
 	n = res.count or 0
 	cli.table("shortage_lists").delete().eq("user_id", uid).execute()
 	return n
+
+
+# ============================================================
+# 库存历史 + 一键撤回(增量入库 / 手改 / OCR 扣减 / CSV 导入 全部入流水)
+# ============================================================
+SOURCE_LABELS = {
+	"restock":     "📥 增量入库",
+	"manual_edit": "✏️ 手动编辑",
+	"ocr_deduct":  "🔍 OCR 扣减",
+	"csv_import":  "📤 CSV 导入",
+	"undo":        "↩️ 撤回操作",
+}
+
+
+def _diff_inventory(before: Dict[str, int],
+                    after: Dict[str, int]) -> List[dict]:
+	"""计算 before → after 的差分列表,仅保留 delta != 0 的色号。"""
+	codes = set(before) | set(after)
+	changes = []
+	for c in sorted(codes):
+		b = int(before.get(c, 0))
+		a = int(after.get(c, 0))
+		if a != b:
+			changes.append({"code": c, "before": b, "after": a, "delta": a - b})
+	return changes
+
+
+def record_inventory_change(
+	source: str,
+	changes: List[dict],
+	note: Optional[str] = None,
+	ref_id: Optional[str] = None,
+) -> Optional[str]:
+	"""写一条 inventory_history。changes 为空则不写。"""
+	if not changes:
+		return None
+	uid = current_user_id()
+	if not uid:
+		return None
+	res = get_client().table("inventory_history").insert({
+		"user_id": uid, "source": source, "ref_id": ref_id,
+		"changes": changes, "note": note,
+	}).execute()
+	return res.data[0]["id"]
+
+
+def apply_inventory_delta(
+	deltas: Dict[str, int],
+	source: str,
+	note: Optional[str] = None,
+	ref_id: Optional[str] = None,
+) -> Optional[str]:
+	"""对若干色号做增量变更(正为加,负为减),库存不会被减到 0 以下,
+	并写一条历史记录,返回 history id。"""
+	deltas = {c: int(d) for c, d in deltas.items()
+	          if c in MARD_PALETTE and int(d) != 0}
+	if not deltas:
+		return None
+	inv = load_inventory()
+	before = {c: int(inv.get(c, 0)) for c in deltas}
+	after = {c: max(0, before[c] + d) for c, d in deltas.items()}
+	save_inventory(after)
+	return record_inventory_change(
+		source, _diff_inventory(before, after),
+		note=note, ref_id=ref_id)
+
+
+def apply_inventory_absolute(
+	targets: Dict[str, int],
+	source: str,
+	note: Optional[str] = None,
+	ref_id: Optional[str] = None,
+	replace_all_mode: bool = False,
+) -> Optional[str]:
+	"""把若干色号库存设为绝对值,并写一条历史。
+
+	- replace_all_mode=False(默认):upsert 增量,只动 targets 里的色号
+	- replace_all_mode=True:整库覆盖(CSV 导入),先 delete-all 再写
+	"""
+	if not targets:
+		return None
+	inv = load_inventory()
+	if replace_all_mode:
+		replace_all(targets)
+		before = inv
+		after = targets
+	else:
+		targets = {c: max(0, int(q)) for c, q in targets.items()
+		           if c in MARD_PALETTE}
+		save_inventory(targets)
+		before = {c: int(inv.get(c, 0)) for c in targets}
+		after = targets
+	return record_inventory_change(
+		source, _diff_inventory(before, after),
+		note=note, ref_id=ref_id)
+
+
+def list_inventory_history(limit: int = 200) -> List[dict]:
+	return (
+		get_client()
+		.table("inventory_history")
+		.select("*")
+		.order("created_at", desc=True)
+		.limit(limit)
+		.execute()
+	).data or []
+
+
+def undo_inventory_change(history_id: str) -> Optional[str]:
+	"""撤回一条历史:把 changes 里每个色号回滚到 before。
+
+	幂等:若该条已被撤回过,直接返回 None;否则写一条 source='undo'
+	的新历史,并把原记录标记为 reverted=True。'undo' 类型的记录自身
+	不支持再次撤回。"""
+	cli = get_client()
+	res = cli.table("inventory_history").select("*").eq(
+		"id", history_id).execute()
+	if not res.data:
+		return None
+	row = res.data[0]
+	if row.get("reverted") or row.get("source") == "undo":
+		return None
+	rollback: Dict[str, int] = {
+		ch["code"]: int(ch["before"])
+		for ch in (row.get("changes") or [])
+	}
+	if not rollback:
+		return None
+	inv = load_inventory()
+	before = {c: int(inv.get(c, 0)) for c in rollback}
+	save_inventory(rollback)
+	new_id = record_inventory_change(
+		source="undo",
+		changes=_diff_inventory(before, rollback),
+		note=f"撤回 {SOURCE_LABELS.get(row['source'], row['source'])}",
+		ref_id=row["id"])
+	cli.table("inventory_history").update({
+		"reverted": True,
+		"reverted_at": datetime.utcnow().isoformat(),
+		"reverted_by_id": new_id,
+	}).eq("id", history_id).execute()
+	return new_id
+
+
+def delete_all_inventory_history() -> int:
+	"""清空当前用户的全部库存变更历史。返回删除的行数。"""
+	uid = current_user_id()
+	if not uid:
+		return 0
+	cli = get_client()
+	cnt = (cli.table("inventory_history")
+	       .select("id", count="exact")
+	       .eq("user_id", uid).execute()).count or 0
+	cli.table("inventory_history").delete().eq("user_id", uid).execute()
+	return cnt
