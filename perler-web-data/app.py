@@ -267,6 +267,33 @@ def _save_ocr_edits(key: str) -> None:
 			st.toast(f"❌ 保存失败：{e}", icon="⚠️")
 
 
+def _ocr_snapshot() -> None:
+	"""在任何增删改 parsed 前调用:把当前 parsed 压入撤回栈(最多留 30 步)。"""
+	stack = st.session_state.setdefault("ocr_undo_stack", [])
+	stack.append(dict(st.session_state.get("ocr_parsed") or {}))
+	st.session_state["ocr_undo_stack"] = stack[-30:]
+
+
+def _ocr_undo() -> None:
+	"""弹出撤回栈顶,恢复 parsed 并写回 ocr_history。覆盖添加/删除/改颗数。"""
+	stack = st.session_state.get("ocr_undo_stack") or []
+	if not stack:
+		st.toast("没有可撤回的操作了", icon="ℹ️")
+		return
+	prev = stack.pop()
+	st.session_state["ocr_undo_stack"] = stack
+	st.session_state["ocr_parsed"] = prev
+	st.session_state["ocr_editor_ver"] = (
+		int(st.session_state.get("ocr_editor_ver", 0)) + 1)
+	ocr_id = st.session_state.get("ocr_id")
+	if ocr_id:
+		try:
+			db.update_ocr_parsed(ocr_id, prev)
+		except Exception:
+			pass
+	st.toast("↩️ 已撤回上一步", icon="✅")
+
+
 def _ocr_palette_change(code: str) -> None:
 	"""色板模式中某个色号的「需要」颗数改了 → 立刻入 parsed + 入库。
 
@@ -275,9 +302,20 @@ def _ocr_palette_change(code: str) -> None:
 	  data_editor / number_input 都会重载拿到最新值
 	"""
 	cur_ver = int(st.session_state.get("ocr_editor_ver", 0))
-	new_val = max(0, int(st.session_state.get(
-		f"ocr_pal_v{cur_ver}_{code}", 0) or 0))
+	widget_key = f"ocr_pal_v{cur_ver}_{code}"
+	# 关键修复:读不到本次输入框的值时直接返回,绝不把「读不到」当成 0 → 误删色号
+	if widget_key not in st.session_state:
+		return
+	try:
+		new_val = max(0, int(st.session_state.get(widget_key) or 0))
+	except (TypeError, ValueError):
+		return
 	parsed = dict(st.session_state.get("ocr_parsed") or {})
+	old_val = int(parsed.get(code, 0))
+	# 值没变(常见于版本号刷新后 number_input 被重建触发的假回调)→ 不动 parsed
+	if new_val == old_val:
+		return
+	_ocr_snapshot()
 	if new_val == 0:
 		parsed.pop(code, None)
 	else:
@@ -298,6 +336,7 @@ def _ocr_palette_change(code: str) -> None:
 
 def _ocr_palette_delete(code: str) -> None:
 	"""色板模式删除按钮：从 parsed 移除该色号。"""
+	_ocr_snapshot()
 	parsed = dict(st.session_state.get("ocr_parsed") or {})
 	parsed.pop(code, None)
 	st.session_state["ocr_parsed"] = parsed
@@ -325,6 +364,7 @@ def _ocr_palette_add() -> None:
 	if cnt <= 0 or code not in MARD_PALETTE:
 		st.toast("⚠️ 请选择有效色号并输入正数颗数", icon="⚠️")
 		return
+	_ocr_snapshot()
 	parsed = dict(st.session_state.get("ocr_parsed") or {})
 	parsed[code] = parsed.get(code, 0) + cnt
 	st.session_state["ocr_parsed"] = parsed
@@ -335,6 +375,41 @@ def _ocr_palette_add() -> None:
 		try:
 			db.update_ocr_parsed(ocr_id, parsed)
 			st.toast(f"➕ 已添加 {code} × {cnt}", icon="✅")
+		except Exception as e:
+			st.toast(f"❌ 添加失败：{e}", icon="⚠️")
+
+
+def _ocr_palette_add_after(anchor: str) -> None:
+	"""色板模式:在某个色块的 ➕ 里就地添加新色号(免下拉到底部)。
+
+	读取该色块专属的 popover 输入键;同色号已存在则叠加。会先存快照,支持撤回。"""
+	ver = int(st.session_state.get("ocr_editor_ver", 0))
+	code = str(st.session_state.get(
+		f"ocr_addafter_code_v{ver}_{anchor}") or "").upper().strip()
+	try:
+		cnt = int(st.session_state.get(
+			f"ocr_addafter_cnt_v{ver}_{anchor}") or 0)
+	except (TypeError, ValueError):
+		cnt = 0
+	if cnt <= 0 or code not in MARD_PALETTE:
+		st.toast("⚠️ 请选有效色号 + 正数颗数再添加", icon="⚠️")
+		return
+	_ocr_snapshot()
+	parsed = dict(st.session_state.get("ocr_parsed") or {})
+	if anchor in parsed and code not in parsed:
+		pairs = list(parsed.items())
+		idx = [k for k, _ in pairs].index(anchor)
+		pairs.insert(idx + 1, (code, cnt))
+		parsed = dict(pairs)
+	else:
+		parsed[code] = parsed.get(code, 0) + cnt
+	st.session_state["ocr_parsed"] = parsed
+	st.session_state["ocr_editor_ver"] = ver + 1
+	ocr_id = st.session_state.get("ocr_id")
+	if ocr_id:
+		try:
+			db.update_ocr_parsed(ocr_id, parsed)
+			st.toast(f"➕ 已在 {anchor} 后添加 {code} × {cnt}", icon="✅")
 		except Exception as e:
 			st.toast(f"❌ 添加失败：{e}", icon="⚠️")
 
@@ -966,6 +1041,7 @@ elif page == PAGES["recognize"]:
 			st.session_state["ocr_raw_lines"] = []
 			st.session_state["ocr_pair_log"] = []
 			st.session_state["ocr_id"] = new_id
+			st.session_state["ocr_undo_stack"] = []
 			st.session_state["ocr_editor_ver"] = (
 				int(st.session_state.get("ocr_editor_ver", 0)) + 1)
 			st.toast(f"✍️ 已新建空白清单（{new_id[:8]}）",
@@ -1477,6 +1553,24 @@ elif page == PAGES["recognize"]:
 										width="stretch",
 										on_click=_ocr_palette_delete,
 										args=(code,))
+									with st.popover("➕ 加色", use_container_width=True):
+										st.caption(f"在 {code} 后添加色号")
+										st.selectbox(
+											"色号",
+											options=sorted(MARD_PALETTE.keys(), key=_ocr_code_key),
+											key=f"ocr_addafter_code_v{ver}_{code}",
+											format_func=lambda c: f"{c} · {SERIES_LABELS.get(c[0], '')}")
+										st.number_input(
+											"颗数", min_value=1, step=1, value=1,
+											key=f"ocr_addafter_cnt_v{ver}_{code}")
+										st.button(
+											"➕ 添加", type="primary", width="stretch",
+											key=f"ocr_addafter_btn_v{ver}_{code}",
+											on_click=_ocr_palette_add_after, args=(code,))
+				if st.session_state.get("ocr_undo_stack"):
+					st.button("↩️ 撤回上一步", key=f"ocr_undo_v{ver}",
+						width="stretch", on_click=_ocr_undo,
+						help="回退最近一次的添加 / 删除 / 改颗数")
 				st.divider()
 				with st.expander("➕ 手动添加色号", expanded=False):
 					ac1, ac2, ac3 = st.columns([3, 2, 1])
@@ -1542,12 +1636,14 @@ elif page == PAGES["recognize"]:
 					f" · 其中 {len(shortage_items)} 个色号原本不足,已扣到 0"
 					if shortage_items else ""))
 				for k in ("ocr_parsed", "ocr_raw_lines", "ocr_pair_log",
-				          "ocr_unknown", "ocr_id", "ocr_editor_ver"):
+				          "ocr_unknown", "ocr_id", "ocr_editor_ver",
+				          "ocr_undo_stack"):
 					st.session_state.pop(k, None)
 				st.rerun()
 			if d3.button("🗑️ 清空", width="stretch", key="ocr_clear"):
 				for k in ("ocr_parsed", "ocr_raw_lines", "ocr_pair_log",
-				          "ocr_unknown", "ocr_id", "ocr_editor_ver"):
+				          "ocr_unknown", "ocr_id", "ocr_editor_ver",
+				          "ocr_undo_stack"):
 					st.session_state.pop(k, None)
 				st.rerun()
 
