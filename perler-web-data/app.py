@@ -414,6 +414,268 @@ def _ocr_palette_add_after(anchor: str) -> None:
 			st.toast(f"❌ 添加失败：{e}", icon="⚠️")
 
 
+def _ocr_add_for_series(series: str) -> None:
+	"""给当前色号大类新增颜色；同色号重复添加时累加颗数。"""
+	ver = int(st.session_state.get("ocr_editor_ver", 0))
+	code_key = f"ocr_series_add_code_v{ver}_{series}"
+	count_key = f"ocr_series_add_count_v{ver}_{series}"
+	code = str(st.session_state.get(code_key) or "").upper().strip()
+	try:
+		count = int(st.session_state.get(count_key) or 0)
+	except (TypeError, ValueError):
+		count = 0
+	valid_codes = [c for c in MARD_PALETTE if c.startswith(series)]
+	if code not in valid_codes or count <= 0:
+		st.toast(f"⚠️ 请选择 {series} 类色号并输入正数颗数", icon="⚠️")
+		return
+	_ocr_snapshot()
+	parsed = dict(st.session_state.get("ocr_parsed") or {})
+	parsed[code] = int(parsed.get(code, 0)) + count
+	st.session_state["ocr_parsed"] = parsed
+	st.session_state["ocr_editor_ver"] = ver + 1
+	ocr_id = st.session_state.get("ocr_id")
+	if ocr_id:
+		try:
+			db.update_ocr_parsed(ocr_id, parsed)
+		except Exception as e:
+			st.toast(f"❌ 添加失败：{e}", icon="⚠️")
+			return
+	st.toast(f"➕ 已添加 {code} × {count}", icon="✅")
+
+
+def _render_ocr_series_add(series: str) -> None:
+	"""每个 OCR 色号大类只渲染一个加色入口。"""
+	ver = int(st.session_state.get("ocr_editor_ver", 0))
+	series_codes = [c for c in MARD_PALETTE if c.startswith(series)]
+	with st.popover(f"➕ 为 {series} 类加色", use_container_width=True):
+		st.selectbox(
+			f"{series} 类色号",
+			options=series_codes,
+			key=f"ocr_series_add_code_v{ver}_{series}")
+		st.number_input(
+			"颗数", min_value=1, value=1, step=1,
+			key=f"ocr_series_add_count_v{ver}_{series}")
+		st.button(
+			f"添加到 {series} 类",
+			type="primary", use_container_width=True,
+			key=f"ocr_series_add_btn_v{ver}_{series}",
+			on_click=_ocr_add_for_series, args=(series,))
+
+
+# ============================================================
+# OCR 色板“大类级加色”适配层
+# 旧渲染代码仍会为每个色块调用 st.popover("➕ 加色")；这里在不改动
+# 原卡片缩进结构的前提下，只显示每个 A/B/.../M 大类的第一个入口，
+# 并把入口中的色号下拉框限制为当前大类。
+# ============================================================
+if not hasattr(st, "_ocr_original_popover"):
+	st._ocr_original_popover = st.popover
+	st._ocr_original_selectbox = st.selectbox
+	st._ocr_original_container = st.container
+
+_OCR_ORIGINAL_POPOVER = st._ocr_original_popover
+_OCR_ORIGINAL_SELECTBOX = st._ocr_original_selectbox
+_OCR_ORIGINAL_CONTAINER = st._ocr_original_container
+_ocr_add_seen_series: set[str] = set()
+_ocr_add_active_series: str | None = None
+
+st.markdown(
+	"<style>[class*='st-key-ocr-hidden-add-']{display:none!important}</style>",
+	unsafe_allow_html=True,
+)
+
+
+class _OcrSeriesAddContext:
+	def __init__(self, context, series: str):
+		self.context = context
+		self.series = series
+
+	def __enter__(self):
+		global _ocr_add_active_series
+		_ocr_add_active_series = self.series
+		return self.context.__enter__()
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		global _ocr_add_active_series
+		try:
+			return self.context.__exit__(exc_type, exc_value, traceback)
+		finally:
+			_ocr_add_active_series = None
+
+
+def _ocr_series_popover(label, *args, **kwargs):
+	"""把旧的逐色号加色入口折叠为每个大类一个入口。"""
+	if label != "➕ 加色":
+		return _OCR_ORIGINAL_POPOVER(label, *args, **kwargs)
+
+	import inspect
+	caller = inspect.currentframe().f_back
+	code = str(caller.f_locals.get("code") or "") if caller else ""
+	series = code[:1].upper()
+	if series not in "ABCDEFGHM":
+		return _OCR_ORIGINAL_POPOVER(label, *args, **kwargs)
+
+	if series not in _ocr_add_seen_series:
+		_ocr_add_seen_series.add(series)
+		context = _OCR_ORIGINAL_POPOVER(
+			f"➕ 为 {series} 类加色", *args, **kwargs)
+	else:
+		context = _OCR_ORIGINAL_CONTAINER(
+			key=f"ocr-hidden-add-{series}-{code}")
+	return _OcrSeriesAddContext(context, series)
+
+
+def _ocr_series_selectbox(label, options, *args, **kwargs):
+	"""加色弹窗打开期间，只保留当前大类的色号。"""
+	if _ocr_add_active_series:
+		filtered = [
+			item for item in list(options)
+			if str(item).upper().startswith(_ocr_add_active_series)
+		]
+		if filtered:
+			options = filtered
+	return _OCR_ORIGINAL_SELECTBOX(label, options, *args, **kwargs)
+
+
+st.popover = _ocr_series_popover
+st.selectbox = _ocr_series_selectbox
+
+# 修正“色板模式 / 表格模式”标签与内容容器的对应关系。
+# 原代码先接收 table 容器、再接收 palette 容器；标签改为色板优先后，
+# 这里交换返回容器，使第一个“色板模式”真正显示色板内容。
+if not hasattr(st, "_palette_default_original_tabs"):
+	st._palette_default_original_tabs = st.tabs
+
+_PALETTE_DEFAULT_ORIGINAL_TABS = st._palette_default_original_tabs
+
+
+def _palette_first_tabs(labels, *args, **kwargs):
+	tab_labels = list(labels)
+	tab_containers = _PALETTE_DEFAULT_ORIGINAL_TABS(
+		tab_labels, *args, **kwargs)
+	if tab_labels == ["🎨 色板模式", "📋 表格模式"]:
+		return tab_containers[1], tab_containers[0]
+	return tab_containers
+
+
+st.tabs = _palette_first_tabs
+
+# OCR 快速核对：真正固定在视口右上角，并提供关闭 / 重新打开按钮。
+# 使用原始 container 包装现有快速核对内容，不需要改动后面的 OCR 渲染缩进。
+if not hasattr(st, "_quick_check_original_container"):
+	st._quick_check_original_container = _OCR_ORIGINAL_CONTAINER
+
+_QUICK_CHECK_ORIGINAL_CONTAINER = st._quick_check_original_container
+st.session_state.setdefault("ocr_quick_check_visible", True)
+
+
+def _close_ocr_quick_check() -> None:
+	st.session_state["ocr_quick_check_visible"] = False
+
+
+def _open_ocr_quick_check() -> None:
+	st.session_state["ocr_quick_check_visible"] = True
+
+
+class _OcrQuickCheckContext:
+	def __init__(self, visible: bool):
+		self.visible = visible
+		self.outer = None
+		self.hidden = None
+
+	def __enter__(self):
+		if self.visible:
+			self.outer = _QUICK_CHECK_ORIGINAL_CONTAINER(
+				key="ocr-quick-check-panel")
+			result = self.outer.__enter__()
+			st.button(
+				"✕ 关闭快速核对",
+				key="ocr_quick_check_close",
+				on_click=_close_ocr_quick_check,
+				use_container_width=True)
+			return result
+
+		# 关闭后保留一个很小的重新打开按钮；原快速核对内容放进隐藏容器。
+		self.outer = _QUICK_CHECK_ORIGINAL_CONTAINER(
+			key="ocr-quick-check-reopen")
+		result = self.outer.__enter__()
+		st.button(
+			"🔎 打开快速核对",
+			key="ocr_quick_check_open",
+			on_click=_open_ocr_quick_check,
+			use_container_width=True)
+		self.hidden = _QUICK_CHECK_ORIGINAL_CONTAINER(
+			key="ocr-quick-check-hidden")
+		self.hidden.__enter__()
+		return result
+
+	def __exit__(self, exc_type, exc_value, traceback):
+		if self.hidden is not None:
+			self.hidden.__exit__(exc_type, exc_value, traceback)
+		if self.outer is not None:
+			return self.outer.__exit__(exc_type, exc_value, traceback)
+		return False
+
+
+def _floating_quick_check_container(*args, **kwargs):
+	if kwargs.get("key") == "ocr-quick-check-panel":
+		return _OcrQuickCheckContext(bool(
+			st.session_state.get("ocr_quick_check_visible", True)))
+	return _QUICK_CHECK_ORIGINAL_CONTAINER(*args, **kwargs)
+
+
+st.container = _floating_quick_check_container
+
+st.markdown("""
+<style>
+/* 始终相对浏览器视口悬浮，而不是只在原页面位置 sticky。 */
+[class*="st-key-ocr-quick-check-panel"] {
+	position: fixed !important;
+	top: 1rem !important;
+	right: 1rem !important;
+	left: auto !important;
+	width: min(760px, calc(100vw - 2rem)) !important;
+	max-height: calc(100vh - 2rem) !important;
+	overflow-y: auto !important;
+	z-index: 1000000 !important;
+	padding: .7rem !important;
+	background: rgba(255,255,255,.97) !important;
+	border: 1px solid rgba(255,182,217,.75) !important;
+	border-radius: 16px !important;
+	box-shadow: 0 14px 42px rgba(58,58,82,.28) !important;
+	backdrop-filter: blur(12px) !important;
+}
+[class*="st-key-ocr-quick-check-panel"] img {
+	max-height: 52vh !important;
+	object-fit: contain !important;
+}
+/* 关闭后只显示一个固定在右上角的小按钮，随时可以重新打开。 */
+[class*="st-key-ocr-quick-check-reopen"] {
+	position: fixed !important;
+	top: 1rem !important;
+	right: 1rem !important;
+	width: 180px !important;
+	z-index: 1000000 !important;
+	padding: .35rem !important;
+	background: rgba(255,255,255,.96) !important;
+	border-radius: 12px !important;
+	box-shadow: 0 8px 24px rgba(58,58,82,.22) !important;
+}
+[class*="st-key-ocr-quick-check-hidden"] {
+	display: none !important;
+}
+@media (max-width: 700px) {
+	[class*="st-key-ocr-quick-check-panel"] {
+		top: .5rem !important;
+		right: .5rem !important;
+		width: calc(100vw - 1rem) !important;
+		max-height: calc(100vh - 1rem) !important;
+	}
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 SERIES_LABELS = {
 	"A":"黄橙暖色","B":"绿色","C":"蓝青色","D":"紫蓝色",
 	"E":"粉色","F":"红色","G":"棕肤色","H":"黑白灰","M":"莫兰迪",
@@ -571,6 +833,7 @@ if page == PAGES["gen"]:
 # ---------- 编辑库存 ----------
 elif page == PAGES["inv"]:
 	inv = db.load_inventory()
+	used_totals = db.load_used_totals()
 	last_ts = db.last_updated()
 	thresholds = db.load_thresholds()  # {'': (lo, mi), 'A5': (lo, mi), ...}
 	DEF_LOW, DEF_MID = thresholds.get("", (db.DEFAULT_LOW, db.DEFAULT_MID))
@@ -837,8 +1100,16 @@ elif page == PAGES["inv"]:
 		st.caption(f"🕒 最近更新: {last_ts}")
 	st.divider()
 
+	stock_step = st.radio(
+		"库存增减步长",
+		[1000, 5000],
+		horizontal=True,
+		format_func=lambda n: f"每次 ±{n:,} 颗",
+		key="inventory_step",
+		help="表格和色板模式中的加减按钮统一使用该步长。")
+
 	edit_mode = st.radio("编辑模式",
-		["📋 表格模式", "🎨 色板模式"],
+		["🎨 色板模式", "📋 表格模式"],
 		horizontal=True, key="inv_edit_mode",
 		help="表格模式适合搜索和导入导出;色板模式按 MARD 色板布局直接看色找色,直观高效")
 	all_series = sorted({k[0] for k in inv})
@@ -866,6 +1137,7 @@ elif page == PAGES["inv"]:
 			has_ov = code in thresholds
 			rows.append({"色块":_swatch((r,g,b)), "色号":code, "系列":code[0],
 			             "RGB":f"({r}, {g}, {b})", "库存":int(stock),
+			             "累计已用":int(used_totals.get(code, 0)),
 			             "阈值": f"<{lo} / ≥{mi}" + (" ⭐" if has_ov else ""),
 			             "状态": tier})
 		df = pd.DataFrame(rows)
@@ -879,9 +1151,11 @@ elif page == PAGES["inv"]:
 				column_config={
 					"色块": st.column_config.ImageColumn("色块", width="small"),
 					"库存": st.column_config.NumberColumn("库存 (颗)",
-						min_value=0, step=1, format="%d"),
+						min_value=0, step=stock_step, format="%d"),
+					"累计已用": st.column_config.NumberColumn(
+						"累计已用 (颗)", format="%d"),
 				},
-				disabled=["色块","色号","系列","RGB","阈值","状态"],
+				disabled=["色块","色号","系列","RGB","累计已用","阈值","状态"],
 				key="inv_editor",
 				on_change=_autosave_table, args=(dict(inv),))
 		st.divider()
@@ -971,10 +1245,12 @@ elif page == PAGES["inv"]:
 							unsafe_allow_html=True)
 						st.number_input(
 							label=code, label_visibility="collapsed",
-							min_value=0, step=1, value=stock,
+							min_value=0, step=stock_step, value=stock,
 							key=f"pal_{code}",
 							on_change=_autosave_palette,
 							args=(code, stock))
+						st.caption(
+							f"累计已用 {int(used_totals.get(code, 0)):,} 颗")
 						rendered_codes.append(code)
 
 		if not rendered_codes:
@@ -1063,6 +1339,46 @@ elif page == PAGES["recognize"]:
 			cp2.image(Image.fromarray(legend_arr),
 				caption=f"OCR 区域 {legend_arr.shape[1]}×{legend_arr.shape[0]}",
 				width="stretch")
+
+			# 快速核对：滚动到下方补充/修改色号时，图例仍固定在视口顶部，
+			# 不需要在原图和编辑区之间反复上下查找。
+			st.markdown(
+				"<style>"
+				"[class*='st-key-ocr-quick-check-panel']{"
+				"position:sticky;top:0.5rem;z-index:999;"
+				"background:rgba(255,255,255,.96);"
+				"border:1px solid rgba(116,92,255,.25);"
+				"border-radius:16px;padding:8px 10px;"
+				"box-shadow:0 8px 24px rgba(50,45,90,.16);"
+				"backdrop-filter:blur(10px);"
+				"}"
+				"[class*='st-key-ocr-quick-check-panel'] img{"
+				"max-height:300px;object-fit:contain;"
+				"}"
+				"</style>",
+				unsafe_allow_html=True,
+			)
+			with st.container(key="ocr-quick-check-panel"):
+				with st.expander(
+					"🔎 快速核对 · 补色时保持在顶部",
+					expanded=True,
+				):
+					st.image(
+						Image.fromarray(legend_arr),
+						caption="当前 OCR 图例区域（可收起）",
+						width="stretch",
+					)
+					raw_lines = st.session_state.get("ocr_raw_lines") or []
+					if raw_lines:
+						preview_text = " ｜ ".join(
+							str(line) for line in raw_lines[:12]
+						)
+						st.caption(f"OCR 文本：{preview_text}")
+					st.caption(
+						"向下滚动修改颗数或按大类补色时，本面板会停留在顶部；"
+						"核对完成后点标题即可收起。"
+					)
+
 			if st.button("🔬 开始 OCR 识别", type="primary",
 			             width="stretch", key="ocr_run"):
 				engine, err = _get_engine()
@@ -1474,7 +1790,7 @@ elif page == PAGES["recognize"]:
 				if items else pd.DataFrame({
 					"序号": pd.Series([], dtype="int64"), "系列": pd.Series([], dtype=str), "色号": pd.Series([], dtype=str),
 					"需要": pd.Series([], dtype="int64")}))
-			tab_table, tab_pal = st.tabs(["📋 表格模式", "🎨 色板模式"])
+			tab_table, tab_pal = st.tabs(["🎨 色板模式", "📋 表格模式"])
 			tab_table.caption("✏️ 双击单元格修改色号/颗数 · 底部 ➕ 新增一行 · 勾选行末 ☑ 删除一行 · "
 			           "改完即自动保存到云端")
 			tab_table.data_editor(edit_df,

@@ -50,6 +50,36 @@ def load_inventory() -> Dict[str, int]:
 	return {r["code"]: int(r["quantity"]) for r in rows}
 
 
+def load_used_totals() -> Dict[str, int]:
+	"""返回每个色号累计实际消耗的豆子数。"""
+	rows = (
+		get_client()
+		.table("inventory")
+		.select("code, used_total")
+		.execute()
+	).data or []
+	return {r["code"]: int(r.get("used_total") or 0) for r in rows}
+
+
+def add_used_totals(used: Dict[str, int]) -> None:
+	"""把本次实际扣掉的颗数累加到 used_total。"""
+	used = {c: max(0, int(n)) for c, n in used.items() if int(n) > 0}
+	if not used:
+		return
+	uid = current_user_id()
+	cli = get_client()
+	current = load_used_totals()
+	payload = [{
+		"user_id": uid,
+		"code": c,
+		"used_total": int(current.get(c, 0)) + n,
+		"updated_at": datetime.utcnow().isoformat(),
+	} for c, n in used.items()]
+	cli.table("inventory").upsert(
+		payload, on_conflict="user_id,code"
+	).execute()
+
+
 def save_inventory(updates: Dict[str, int]) -> None:
 	if not updates:
 		return
@@ -398,6 +428,10 @@ def apply_inventory_delta(
 	before = {c: int(inv.get(c, 0)) for c in deltas}
 	after = {c: max(0, before[c] + d) for c, d in deltas.items()}
 	save_inventory(after)
+	# 只有实际消耗才累计“已用总数”；库存不足时按真正扣掉的数量计。
+	if source == "ocr_deduct":
+		db_used = {c: before[c] - after[c] for c in after if after[c] < before[c]}
+		add_used_totals(db_used)
 	return record_inventory_change(
 		source, _diff_inventory(before, after),
 		note=note, ref_id=ref_id)
