@@ -657,7 +657,7 @@ viewer.addEventListener('pointerup',end);viewer.addEventListener('pointercancel'
 </script>
 </body>
 </html>
-""", height=320, scrolling=False)
+""", height=240, scrolling=False)
 
 
 st.image = _zoomable_quick_check_image
@@ -677,7 +677,7 @@ st.markdown("""
 }
 [class*="st-key-ocr-quick-check-panel"] iframe {
 	width:100% !important;
-	height:320px !important;
+	height:240px !important;
 	min-height:0 !important;
 	border:0 !important;
 }
@@ -756,7 +756,7 @@ st.markdown("""
 	left: auto !important;
 	display: block !important;
 	box-sizing: border-box !important;
-	width: min(620px, calc(100vw - 2rem)) !important;
+	width: min(520px, calc(100vw - 2rem)) !important;
 	height: auto !important;
 	max-width: calc(100vw - 2rem) !important;
 	max-height: calc(100vh - 2rem) !important;
