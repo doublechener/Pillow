@@ -504,7 +504,7 @@ class _OcrSeriesAddContext:
 
 
 def _ocr_series_popover(label, *args, **kwargs):
-	"""把旧的逐色号加色入口折叠为每个大类一个入口。"""
+	"""每个大类只保留一个加色入口，并放到该类最后一个色号之后。"""
 	if label != "➕ 加色":
 		return _OCR_ORIGINAL_POPOVER(label, *args, **kwargs)
 
@@ -515,8 +515,18 @@ def _ocr_series_popover(label, *args, **kwargs):
 	if series not in "ABCDEFGHM":
 		return _OCR_ORIGINAL_POPOVER(label, *args, **kwargs)
 
-	if series not in _ocr_add_seen_series:
-		_ocr_add_seen_series.add(series)
+	# OCR 色板按系列、数字编号升序展示；仅在当前系列最后一个色号后显示按钮。
+	parsed = dict(st.session_state.get("ocr_parsed") or {})
+	series_codes = [
+		item for item in parsed
+		if str(item).upper().startswith(series)
+	]
+	def _series_code_number(item: str) -> int:
+		suffix = str(item)[1:]
+		return int(suffix) if suffix.isdigit() else -1
+	last_code = max(series_codes, key=_series_code_number) if series_codes else code
+
+	if code == last_code:
 		context = _OCR_ORIGINAL_POPOVER(
 			f"➕ 为 {series} 类加色", *args, **kwargs)
 	else:
