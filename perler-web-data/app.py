@@ -657,7 +657,7 @@ viewer.addEventListener('pointerup',end);viewer.addEventListener('pointercancel'
 </script>
 </body>
 </html>
-""", height=520, scrolling=False)
+""", height=320, scrolling=False)
 
 
 st.image = _zoomable_quick_check_image
@@ -665,7 +665,6 @@ st.image = _zoomable_quick_check_image
 # 悬浮窗内容只保留图片；隐藏原有标题、OCR 文本和说明文字。
 st.markdown("""
 <style>
-[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpander"] > details > summary,
 [class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] [data-testid="stCaptionContainer"],
 [class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] {
 	display:none !important;
@@ -678,8 +677,8 @@ st.markdown("""
 }
 [class*="st-key-ocr-quick-check-panel"] iframe {
 	width:100% !important;
-	height:calc(100% - 64px) !important;
-	min-height:180px !important;
+	height:320px !important;
+	min-height:0 !important;
 	border:0 !important;
 }
 </style>
@@ -757,14 +756,12 @@ st.markdown("""
 	left: auto !important;
 	display: block !important;
 	box-sizing: border-box !important;
-	width: min(760px, calc(100vw - 2rem));
-	height: min(640px, calc(100vh - 2rem));
-	min-width: 360px !important;
-	min-height: 260px !important;
+	width: min(620px, calc(100vw - 2rem)) !important;
+	height: auto !important;
 	max-width: calc(100vw - 2rem) !important;
 	max-height: calc(100vh - 2rem) !important;
-	resize: both !important;
-	overflow: auto !important;
+	resize: none !important;
+	overflow-y: auto !important;
 	background-clip: padding-box !important;
 	z-index: 1000000 !important;
 	padding: .7rem !important;
@@ -797,7 +794,7 @@ st.markdown("""
 	[class*="st-key-ocr-quick-check-panel"] {
 		top: .5rem !important;
 		right: .5rem !important;
-		width: calc(100vw - 1rem);
+		width: calc(100vw - 1rem) !important;
 		max-width: calc(100vw - 1rem) !important;
 		max-height: calc(100vh - 1rem) !important;
 	}
