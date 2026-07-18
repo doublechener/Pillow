@@ -63,3 +63,11 @@ perler-web-data/
 ## 🔒 数据隔离
 
 所有 Postgres 表和 Storage Bucket 都启用了 Row Level Security,策略统一 `user_id = auth.uid()`。每个用户只能访问自己的数据,即使 anon key 泄漏也无法越权。
+
+##  git 推送
+如果正在使用 Clash 等代理软件
+确认代理已启动，然后按实际 HTTP 代理端口配置，例如端口为 7890：
+git config --global http.proxy http://127.0.0.1:7890
+git config --global https.proxy http://127.0.0.1:7890
+
+如果代理端口不是 7890，替换成软件中显示的端口。
