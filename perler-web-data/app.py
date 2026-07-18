@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 
 from palette import MARD_PALETTE
@@ -576,7 +577,113 @@ if not hasattr(st, "_quick_check_original_container"):
 	st._quick_check_original_container = _OCR_ORIGINAL_CONTAINER
 
 _QUICK_CHECK_ORIGINAL_CONTAINER = st._quick_check_original_container
+if not hasattr(st, "_quick_check_original_image"):
+	st._quick_check_original_image = st.image
+_QUICK_CHECK_ORIGINAL_IMAGE = st._quick_check_original_image
+_ocr_quick_check_active = False
 st.session_state.setdefault("ocr_quick_check_visible", True)
+
+
+def _zoomable_quick_check_image(image, *args, **kwargs):
+	"""悬浮核对窗中的图片：滚轮/双指缩放，按住拖动查看细节。"""
+	if not _ocr_quick_check_active:
+		return _QUICK_CHECK_ORIGINAL_IMAGE(image, *args, **kwargs)
+
+	try:
+		if isinstance(image, Image.Image):
+			viewer_image = image.convert("RGB")
+		elif isinstance(image, np.ndarray):
+			viewer_image = Image.fromarray(image).convert("RGB")
+		else:
+			return _QUICK_CHECK_ORIGINAL_IMAGE(image, *args, **kwargs)
+		buffer = io.BytesIO()
+		viewer_image.save(buffer, format="PNG")
+		image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+	except Exception:
+		return _QUICK_CHECK_ORIGINAL_IMAGE(image, *args, **kwargs)
+
+	components.html(f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;}}
+#viewer{{position:relative;width:100%;height:100vh;overflow:hidden;
+	border-radius:12px;background:#fff;touch-action:none;user-select:none;}}
+#viewer img{{position:absolute;left:0;top:0;max-width:none;max-height:none;
+	transform-origin:0 0;cursor:grab;-webkit-user-drag:none;}}
+#viewer.dragging img{{cursor:grabbing;}}
+</style>
+</head>
+<body>
+<div id="viewer"><img id="zoomImage" src="data:image/png;base64,{image_b64}" draggable="false"></div>
+<script>
+const viewer=document.getElementById('viewer');
+const img=document.getElementById('zoomImage');
+let scale=1,x=0,y=0,startX=0,startY=0,baseX=0,baseY=0;
+const pointers=new Map(); let pinchDistance=0,pinchScale=1;
+function clamp(v,a,b){{return Math.max(a,Math.min(b,v));}}
+function draw(){{img.style.transform=`translate(${{x}}px,${{y}}px) scale(${{scale}})`;}}
+function fit(){{
+	const w=viewer.clientWidth,h=viewer.clientHeight;
+	scale=Math.min(w/img.naturalWidth,h/img.naturalHeight);
+	x=(w-img.naturalWidth*scale)/2; y=(h-img.naturalHeight*scale)/2; draw();
+}}
+function zoomAt(px,py,next){{
+	next=clamp(next,0.15,12); const ratio=next/scale;
+	x=px-(px-x)*ratio; y=py-(py-y)*ratio; scale=next; draw();
+}}
+img.addEventListener('load',fit); window.addEventListener('resize',fit);
+viewer.addEventListener('wheel',e=>{{
+	e.preventDefault(); const r=viewer.getBoundingClientRect();
+	zoomAt(e.clientX-r.left,e.clientY-r.top,scale*(e.deltaY<0?1.14:0.88));
+}},{{passive:false}});
+viewer.addEventListener('dblclick',fit);
+viewer.addEventListener('pointerdown',e=>{{
+	viewer.setPointerCapture(e.pointerId); pointers.set(e.pointerId,{{x:e.clientX,y:e.clientY}});
+	startX=e.clientX;startY=e.clientY;baseX=x;baseY=y;viewer.classList.add('dragging');
+	if(pointers.size===2){{const p=[...pointers.values()];pinchDistance=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);pinchScale=scale;}}
+}});
+viewer.addEventListener('pointermove',e=>{{
+	if(!pointers.has(e.pointerId))return; pointers.set(e.pointerId,{{x:e.clientX,y:e.clientY}});
+	if(pointers.size===1){{x=baseX+e.clientX-startX;y=baseY+e.clientY-startY;draw();}}
+	else if(pointers.size===2){{const p=[...pointers.values()];const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
+		const r=viewer.getBoundingClientRect();const cx=(p[0].x+p[1].x)/2-r.left,cy=(p[0].y+p[1].y)/2-r.top;
+		zoomAt(cx,cy,pinchScale*d/Math.max(1,pinchDistance));}}
+}});
+function end(e){{pointers.delete(e.pointerId);viewer.classList.remove('dragging');if(pointers.size===1){{const p=[...pointers.values()][0];startX=p.x;startY=p.y;baseX=x;baseY=y;}}}}
+viewer.addEventListener('pointerup',end);viewer.addEventListener('pointercancel',end);
+</script>
+</body>
+</html>
+""", height=520, scrolling=False)
+
+
+st.image = _zoomable_quick_check_image
+
+# 悬浮窗内容只保留图片；隐藏原有标题、OCR 文本和说明文字。
+st.markdown("""
+<style>
+[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpander"] > details > summary,
+[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] [data-testid="stCaptionContainer"],
+[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] {
+	display:none !important;
+}
+[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpander"] > details,
+[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] {
+	border:none !important;
+	padding:0 !important;
+	margin:0 !important;
+}
+[class*="st-key-ocr-quick-check-panel"] iframe {
+	width:100% !important;
+	height:calc(100% - 64px) !important;
+	min-height:180px !important;
+	border:0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 def _close_ocr_quick_check() -> None:
@@ -594,7 +701,9 @@ class _OcrQuickCheckContext:
 		self.hidden = None
 
 	def __enter__(self):
+		global _ocr_quick_check_active
 		if self.visible:
+			_ocr_quick_check_active = True
 			self.outer = _QUICK_CHECK_ORIGINAL_CONTAINER(
 				key="ocr-quick-check-panel")
 			result = self.outer.__enter__()
@@ -620,6 +729,8 @@ class _OcrQuickCheckContext:
 		return result
 
 	def __exit__(self, exc_type, exc_value, traceback):
+		global _ocr_quick_check_active
+		_ocr_quick_check_active = False
 		if self.hidden is not None:
 			self.hidden.__exit__(exc_type, exc_value, traceback)
 		if self.outer is not None:
@@ -644,9 +755,17 @@ st.markdown("""
 	top: 1rem !important;
 	right: 1rem !important;
 	left: auto !important;
-	width: min(760px, calc(100vw - 2rem)) !important;
+	display: block !important;
+	box-sizing: border-box !important;
+	width: min(760px, calc(100vw - 2rem));
+	height: min(640px, calc(100vh - 2rem));
+	min-width: 360px !important;
+	min-height: 260px !important;
+	max-width: calc(100vw - 2rem) !important;
 	max-height: calc(100vh - 2rem) !important;
-	overflow-y: auto !important;
+	resize: both !important;
+	overflow: auto !important;
+	background-clip: padding-box !important;
 	z-index: 1000000 !important;
 	padding: .7rem !important;
 	background: rgba(255,255,255,.97) !important;
@@ -678,7 +797,8 @@ st.markdown("""
 	[class*="st-key-ocr-quick-check-panel"] {
 		top: .5rem !important;
 		right: .5rem !important;
-		width: calc(100vw - 1rem) !important;
+		width: calc(100vw - 1rem);
+		max-width: calc(100vw - 1rem) !important;
 		max-height: calc(100vh - 1rem) !important;
 	}
 }
