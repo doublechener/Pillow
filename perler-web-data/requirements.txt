@@ -1,8 +1,8 @@
-# 固定版本，避免 Streamlit Cloud 自动升级后破坏现有组件行为
 streamlit==1.55.0
 Pillow==11.3.0
 numpy==2.2.6
 pandas==2.2.3
+opencv-python-headless==4.11.0.86
 rapidocr-onnxruntime==1.4.4
 onnxruntime==1.20.1
 supabase==2.31.0
