@@ -548,8 +548,10 @@ def _ocr_series_selectbox(label, options, *args, **kwargs):
 	return _OCR_ORIGINAL_SELECTBOX(label, options, *args, **kwargs)
 
 
-st.popover = _ocr_series_popover
-st.selectbox = _ocr_series_selectbox
+# 稳定版：不再全局替换 Streamlit 原生组件。
+# OCR 大类加色入口在实际渲染循环中直接调用 _render_ocr_series_add()。
+# st.popover = _ocr_series_popover
+# st.selectbox = _ocr_series_selectbox
 
 # 修正“色板模式 / 表格模式”标签与内容容器的对应关系。
 # 原代码先接收 table 容器、再接收 palette 容器；标签改为色板优先后，
@@ -569,7 +571,8 @@ def _palette_first_tabs(labels, *args, **kwargs):
 	return tab_containers
 
 
-st.tabs = _palette_first_tabs
+# 不再全局替换 st.tabs；下方按标签顺序直接接收 tab 容器。
+# st.tabs = _palette_first_tabs
 
 # OCR 快速核对：真正固定在视口右上角，并提供关闭 / 重新打开按钮。
 # 使用原始 container 包装现有快速核对内容，不需要改动后面的 OCR 渲染缩进。
@@ -660,7 +663,9 @@ viewer.addEventListener('pointerup',end);viewer.addEventListener('pointercancel'
 """, height=180, scrolling=False)
 
 
-st.image = _zoomable_quick_check_image
+# Streamlit 1.56+ 已弃用 components.html；不要全局替换 st.image。
+# 快速核对回退为原生 st.image，优先保证手机端和 WebSocket 会话稳定。
+# st.image = _zoomable_quick_check_image
 
 # 悬浮窗内容只保留图片；隐藏原有标题、OCR 文本和说明文字。
 st.markdown("""
@@ -744,7 +749,9 @@ def _floating_quick_check_container(*args, **kwargs):
 	return _QUICK_CHECK_ORIGINAL_CONTAINER(*args, **kwargs)
 
 
-st.container = _floating_quick_check_container
+# 不再全局替换 st.container。原快速核对区域继续按普通容器渲染；
+# 避免每次 rerun 重建自定义 iframe、关闭/重开上下文而导致前端会话失步。
+# st.container = _floating_quick_check_container
 
 st.markdown("""
 <style>
@@ -1917,7 +1924,7 @@ elif page == PAGES["recognize"]:
 				if items else pd.DataFrame({
 					"序号": pd.Series([], dtype="int64"), "系列": pd.Series([], dtype=str), "色号": pd.Series([], dtype=str),
 					"需要": pd.Series([], dtype="int64")}))
-			tab_table, tab_pal = st.tabs(["🎨 色板模式", "📋 表格模式"])
+			tab_pal, tab_table = st.tabs(["🎨 色板模式", "📋 表格模式"])
 			tab_table.caption("✏️ 双击单元格修改色号/颗数 · 底部 ➕ 新增一行 · 勾选行末 ☑ 删除一行 · "
 			           "改完即自动保存到云端")
 			tab_table.data_editor(edit_df,
@@ -1964,6 +1971,8 @@ elif page == PAGES["recognize"]:
 							f"margin-left:10px;'>{len(series_codes)} 色 · "
 							f"共 {series_total:,} 颗</span></div>",
 							unsafe_allow_html=True)
+						# 每个色号大类只渲染一个加色入口；下拉框仅含本大类色号。
+						_render_ocr_series_add(s)
 						for i in range(0, len(series_codes), cols_per_row):
 							row = st.columns(cols_per_row)
 							for j, (code, need) in enumerate(
@@ -1996,20 +2005,7 @@ elif page == PAGES["recognize"]:
 										width="stretch",
 										on_click=_ocr_palette_delete,
 										args=(code,))
-									with st.popover("➕ 加色", use_container_width=True):
-										st.caption(f"在 {code} 后添加色号")
-										st.selectbox(
-											"色号",
-											options=sorted(MARD_PALETTE.keys(), key=_ocr_code_key),
-											key=f"ocr_addafter_code_v{ver}_{code}",
-											format_func=lambda c: f"{c} · {SERIES_LABELS.get(c[0], '')}")
-										st.number_input(
-											"颗数", min_value=1, step=1, value=1,
-											key=f"ocr_addafter_cnt_v{ver}_{code}")
-										st.button(
-											"➕ 添加", type="primary", width="stretch",
-											key=f"ocr_addafter_btn_v{ver}_{code}",
-											on_click=_ocr_palette_add_after, args=(code,))
+
 				if st.session_state.get("ocr_undo_stack"):
 					st.button("↩️ 撤回上一步", key=f"ocr_undo_v{ver}",
 						width="stretch", on_click=_ocr_undo,
