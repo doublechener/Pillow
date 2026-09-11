@@ -366,11 +366,26 @@ h1, h2, h3 {
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
 html { scroll-behavior: smooth; }
-/* Keep the reference near edits without covering the viewport or dialogs. */
+/* Viewport-fixed reference: scrolling the editor must not move the window. */
+.st-key-ocr-quick-check-panel,
+.st-key-ocr-quick-check-reopen {
+	position: fixed !important;
+	top: calc(4rem + env(safe-area-inset-top, 0px)) !important;
+	right: max(1rem, env(safe-area-inset-right, 0px)) !important;
+	left: auto !important; bottom: auto !important;
+	z-index: 1000; box-sizing: border-box;
+}
 .st-key-ocr-quick-check-panel {
-	position: sticky; top: 3.75rem; z-index: 50;
+	width: min(460px, calc(100vw - 2rem)) !important;
+	max-height: calc(100dvh - 5rem); overflow-y: auto;
 	background: #fff; border: 1px solid #efc6dc;
 	border-radius: 12px; padding: 6px;
+	box-shadow: 0 12px 36px rgba(58,58,82,.24);
+}
+.st-key-ocr-quick-check-reopen {
+	width: 180px !important; max-width: calc(100vw - 1rem);
+	background: #fff; border-radius: 12px;
+	box-shadow: 0 6px 20px rgba(58,58,82,.18);
 }
 .st-key-ocr-quick-check-panel iframe { width: 100%; border: 0; }
 @media (max-width: 700px) {
@@ -385,7 +400,20 @@ html { scroll-behavior: smooth; }
 	.hero-banner { padding: 12px; gap: 10px; }
 	.hero-title { font-size: 26px; }
 	.hero-sub { overflow-wrap: anywhere; }
-	.st-key-ocr-quick-check-panel { top: 3.5rem; }
+	.st-key-ocr-quick-check-panel,
+	.st-key-ocr-quick-check-reopen {
+		top: calc(3.75rem + env(safe-area-inset-top, 0px)) !important;
+		right: max(.5rem, env(safe-area-inset-right, 0px)) !important;
+	}
+	.st-key-ocr-quick-check-panel {
+		width: calc(100vw - 1rem) !important;
+		max-height: min(420px, 55dvh);
+	}
+	.st-key-ocr-quick-check-panel iframe,
+	.st-key-ocr-quick-check-panel [data-testid="stElementContainer"]:has(> iframe) {
+		height: min(200px, 30dvh) !important;
+		flex: none !important; min-height: 0 !important;
+	}
 }
 </style>
 """

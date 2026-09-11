@@ -10,7 +10,7 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from image_safety import load_image, validate_pattern, nearest_colors
-from image_viewer import render_quick_check
+from image_viewer import render_floating_quick_check
 from palette import MARD_PALETTE
 from theme import (inject_global_css, render_hero,
                    render_idle_pixel, mascot_html)
@@ -1146,9 +1146,7 @@ elif page == PAGES["recognize"]:
 				caption=f"OCR 区域 {legend_arr.shape[1]}×{legend_arr.shape[0]}",
 				width="stretch")
 
-			with st.container(key="ocr-quick-check-panel"):
-				with st.expander("🔎 快速核对 · 点击展开 / 收起", expanded=True):
-					render_quick_check(Image.fromarray(legend_arr))
+			render_floating_quick_check(Image.fromarray(legend_arr))
 
 			if st.button("🔬 开始 OCR 识别", type="primary",
 			             width="stretch", key="ocr_run"):
