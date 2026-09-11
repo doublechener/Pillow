@@ -65,6 +65,23 @@ perler-web-data/
 所有 Postgres 表和 Storage Bucket 都启用了 Row Level Security,策略统一 `user_id = auth.uid()`。每个用户只能访问自己的数据,即使 anon key 泄漏也无法越权。
 
 ##  git 推送
+
+### 稳定性与手机端修复（2026-09-11）
+
+- 快速核对：点击 `＋ / −` 放大缩小，拖动查看，手机支持双指缩放；`适应` 恢复全图，点击面板标题收起。面板采用页内吸顶，不再固定覆盖整个页面。
+- 上传限制为 20 MB / 2000 万像素；工作图片最长边缩至 3200 px，自动校正手机照片方向，透明背景按白色处理。原始上传文件仍用于历史存档。
+- 输出上限为 1600 万像素、横纵最多 300 豆。超过时显示提示；颜色匹配分批计算以降低峰值内存，逐格采样使用 uint8 图片。
+- OCR 模型按需加载、每个推理线程数为 1、共享模型串行调用；Supabase 客户端按会话隔离，刷新 token 使用 SDK 公共接口；库存初始化每次登录只执行一次。
+- 手机端预览纵向排列，导航可换行，输入字体至少 16 px。
+
+在本目录执行 `python -m unittest -v test_regressions`。测试使用模拟登录，不向云端写入数据；界面验证使用临时合成图片测试入口，验证后已移除。
+
+本地已通过 6 项回归测试、390×844 手机及 1280×900 桌面浏览器检查。测试环境为 Python 3.12、Streamlit 1.57.0，部署固定版本仍为 requirements.txt 中的 1.55.0；云端版本和 iOS 微信内置浏览器仍需上线复验。双指手势已实现，但本地浏览器检查仅实测按钮缩放、恢复、收起和布局。
+
+部署必须包含新增的 `image_safety.py`、`image_viewer.py`、`ocr_runtime.py`，不能只提交 app.py。入口保持 `perler-web-data/app.py`。Streamlit 配置按工作目录读取；若云端从仓库根目录启动，将本项目 `.streamlit/config.toml` 的 server 限制合并到仓库根配置中。即使该配置未被加载，程序仍执行图片大小与像素检查。
+
+截图中的 `Received no response from server / Code: 1ST` 不能单凭截图确定原因。这次修复消除了可见的资源风险；尚未取得部署服务日志，未宣称云端错误已彻底解决。若上线后仍出现，在 Streamlit Cloud 的 Manage app 查看发生时间对应的日志，检查进程重启、内存耗尽、依赖启动异常及网络连接。[Streamlit 官方排查说明](https://docs.streamlit.io/deploy/streamlit-community-cloud/manage-your-app)。
+
 如果正在使用 Clash 等代理软件
 确认代理已启动，然后按实际 HTTP 代理端口配置，例如端口为 7890：
 git config --global http.proxy http://127.0.0.1:7890

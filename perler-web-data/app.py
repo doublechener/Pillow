@@ -1137,10 +1137,9 @@ elif page == PAGES["recognize"]:
 
 		if ocr_file:
 			img = _uploaded_image(ocr_file)
-			arr = np.array(img)
-			Ho,Wo = arr.shape[:2]
+			Wo, Ho = img.size
 			cut = Ho * (100-crop) // 100
-			legend_arr = arr[cut:, :]
+			legend_arr = np.array(img.crop((0, cut, Wo, Ho)))
 			cp1,cp2 = st.columns(2)
 			cp1.image(img, caption=f"原图 {Wo}×{Ho}", width="stretch")
 			cp2.image(Image.fromarray(legend_arr),
