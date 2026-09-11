@@ -1,26 +1,7 @@
 """Isolated image viewer: no monkey-patching Streamlit or parent DOM."""
 import base64
 import io
-import streamlit as st
 import streamlit.components.v1 as components
-
-
-def _set_quick_check_visible(visible):
-	st.session_state["quick_check_visible"] = visible
-
-
-def render_floating_quick_check(image):
-	"""Viewport-fixed reference; closing it skips image encoding/rendering."""
-	if not st.session_state.get("quick_check_visible", True):
-		with st.container(key="ocr-quick-check-reopen"):
-			st.button("🔎 打开快速核对", key="quick_check_open",
-				on_click=_set_quick_check_visible, args=(True,), width="stretch")
-		return
-	with st.container(key="ocr-quick-check-panel"):
-		with st.expander("🔎 悬浮核对 · 点击收起 / 展开", expanded=True):
-			render_quick_check(image)
-			st.button("✕ 关闭悬浮窗", key="quick_check_close",
-				on_click=_set_quick_check_visible, args=(False,), width="stretch")
 
 
 def render_quick_check(image):

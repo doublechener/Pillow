@@ -1,4 +1,5 @@
 import io
+import sys
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -84,6 +85,27 @@ class RegressionTests(unittest.TestCase):
             app.radio(key='rec_mode').set_value('🎨 整图逐格识别色块').run()
             self.assertFalse(app.exception)
             self.assertEqual(seed.call_count, 1)
+
+    def test_legacy_viewer_module_with_floating_window(self):
+        # Emulate a warm deployment retaining the original viewer API.
+        from unittest.mock import Mock
+        viewer = Mock()
+        legacy = SimpleNamespace(render_quick_check=viewer)
+        upload = io.BytesIO()
+        Image.new('RGB', (80, 40), 'white').save(upload, format='PNG')
+        upload.name = 'fixture.png'
+        with patch.dict(sys.modules, {'image_viewer': legacy}), patch('auth.require_login', return_value={'email': 'test@example.com', 'user_id': 'test'}), patch('db.ensure_inventory_seeded'), patch('streamlit.file_uploader', return_value=upload):
+            app = AppTest.from_file(str(Path(__file__).with_name('app.py')))
+            app.session_state['nav_page'] = '🔍 识别已有拼豆图'
+            app.run()
+            self.assertFalse(app.exception)
+            self.assertEqual(viewer.call_count, 1)
+            app.button(key='quick_check_close').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(viewer.call_count, 1)
+            app.button(key='quick_check_open').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(viewer.call_count, 2)
 
 
 if __name__ == '__main__':

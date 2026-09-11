@@ -10,7 +10,7 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from image_safety import load_image, validate_pattern, nearest_colors
-from image_viewer import render_floating_quick_check
+from image_viewer import render_quick_check
 from palette import MARD_PALETTE
 from theme import (inject_global_css, render_hero,
                    render_idle_pixel, mascot_html)
@@ -18,6 +18,25 @@ import auth
 import db
 import storage
 from storage import PATTERN_BUCKET, OCR_BUCKET
+
+
+def _set_quick_check_visible(visible):
+	st.session_state["quick_check_visible"] = visible
+
+
+def render_floating_quick_check(image):
+	# Keep the shell in the rerun entrypoint; use the viewer's stable API.
+	if not st.session_state.get("quick_check_visible", True):
+		with st.container(key="ocr-quick-check-reopen"):
+			st.button("🔎 打开快速核对", key="quick_check_open",
+				on_click=_set_quick_check_visible, args=(True,), width="stretch")
+		return
+	with st.container(key="ocr-quick-check-panel"):
+		with st.expander("🔎 悬浮核对 · 点击收起 / 展开", expanded=True):
+			render_quick_check(image)
+			st.button("✕ 关闭悬浮窗", key="quick_check_close",
+				on_click=_set_quick_check_visible, args=(False,), width="stretch")
+
 
 APP_NAME = "豆映工坊"
 APP_TAGLINE = "像素映豆 · 库存随手 · 灵感成图"
