@@ -46,8 +46,7 @@ def sign_out() -> None:
 		get_client().auth.sign_out()
 	except Exception:
 		pass
-	for k in ("sb_session", "ocr_parsed", "ocr_raw_lines",
-	         "ocr_unknown", "rec_counter", "rec_preview_bytes"):
+	for k in list(st.session_state):
 		st.session_state.pop(k, None)
 
 

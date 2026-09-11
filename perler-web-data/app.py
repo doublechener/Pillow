@@ -7,9 +7,10 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from PIL import Image, ImageDraw, ImageFont
 
+from image_safety import load_image, validate_pattern, nearest_colors
+from image_viewer import render_quick_check
 from palette import MARD_PALETTE
 from theme import (inject_global_css, render_hero,
                    render_idle_pixel, mascot_html)
@@ -28,7 +29,15 @@ inject_global_css()
 # 登录门
 # ============================================================
 session = auth.require_login()
-db.ensure_inventory_seeded()
+try:
+	if st.session_state.get("inventory_seeded_for") != session["user_id"]:
+		db.ensure_inventory_seeded()
+		st.session_state["inventory_seeded_for"] = session["user_id"]
+except Exception:
+	st.error("暂时无法连接库存服务，请稍后重试。")
+	if st.button("重试连接"):
+		st.rerun()
+	st.stop()
 
 # ============================================================
 # 顶栏
@@ -48,6 +57,14 @@ with top_r:
 # ============================================================
 # 核心算法(纯函数,与旧版一致)
 # ============================================================
+def _uploaded_image(upload):
+	try:
+		return load_image(upload.getvalue())
+	except ValueError as exc:
+		st.warning(str(exc))
+		st.stop()
+
+
 def image_to_perler(img, width_beads, height_beads,
                     palette, cell_size, show_grid, show_codes=False):
 	img = img.convert("RGBA")
@@ -55,17 +72,14 @@ def image_to_perler(img, width_beads, height_beads,
 	img = Image.alpha_composite(bg, img).convert("RGB")
 	if height_beads is None:
 		ow, oh = img.size
-		height_beads = int(round(width_beads * oh / ow))
+		height_beads = max(1, int(round(width_beads * oh / ow)))
+	validate_pattern(width_beads, height_beads, cell_size, palette)
 	img_small = img.resize((width_beads, height_beads), Image.Resampling.LANCZOS)
 	pixels = np.array(img_small, dtype=np.int32)
 
 	names = list(palette.keys())
 	prgb = np.array([palette[n] for n in names], dtype=np.int32)
-	weights = np.array([0.3, 0.59, 0.11], dtype=np.float32)
-	flat = pixels.reshape(-1, 3)
-	diff = flat[:, None, :] - prgb[None, :, :]
-	dist = (diff * diff).astype(np.float32) @ weights
-	nearest = dist.argmin(axis=1).reshape(height_beads, width_beads)
+	nearest = nearest_colors(pixels, prgb).reshape(height_beads, width_beads)
 
 	counter = Counter()
 	rgb_grid = [[None] * width_beads for _ in range(height_beads)]
@@ -463,353 +477,6 @@ def _render_ocr_series_add(series: str) -> None:
 			on_click=_ocr_add_for_series, args=(series,))
 
 
-# ============================================================
-# OCR 色板“大类级加色”适配层
-# 旧渲染代码仍会为每个色块调用 st.popover("➕ 加色")；这里在不改动
-# 原卡片缩进结构的前提下，只显示每个 A/B/.../M 大类的第一个入口，
-# 并把入口中的色号下拉框限制为当前大类。
-# ============================================================
-if not hasattr(st, "_ocr_original_popover"):
-	st._ocr_original_popover = st.popover
-	st._ocr_original_selectbox = st.selectbox
-	st._ocr_original_container = st.container
-
-_OCR_ORIGINAL_POPOVER = st._ocr_original_popover
-_OCR_ORIGINAL_SELECTBOX = st._ocr_original_selectbox
-_OCR_ORIGINAL_CONTAINER = st._ocr_original_container
-_ocr_add_seen_series: set[str] = set()
-_ocr_add_active_series: str | None = None
-
-st.markdown(
-	"<style>[class*='st-key-ocr-hidden-add-']{display:none!important}</style>",
-	unsafe_allow_html=True,
-)
-
-
-class _OcrSeriesAddContext:
-	def __init__(self, context, series: str):
-		self.context = context
-		self.series = series
-
-	def __enter__(self):
-		global _ocr_add_active_series
-		_ocr_add_active_series = self.series
-		return self.context.__enter__()
-
-	def __exit__(self, exc_type, exc_value, traceback):
-		global _ocr_add_active_series
-		try:
-			return self.context.__exit__(exc_type, exc_value, traceback)
-		finally:
-			_ocr_add_active_series = None
-
-
-def _ocr_series_popover(label, *args, **kwargs):
-	"""每个大类只保留一个加色入口，并放到该类最后一个色号之后。"""
-	if label != "➕ 加色":
-		return _OCR_ORIGINAL_POPOVER(label, *args, **kwargs)
-
-	import inspect
-	caller = inspect.currentframe().f_back
-	code = str(caller.f_locals.get("code") or "") if caller else ""
-	series = code[:1].upper()
-	if series not in "ABCDEFGHM":
-		return _OCR_ORIGINAL_POPOVER(label, *args, **kwargs)
-
-	# OCR 色板按系列、数字编号升序展示；仅在当前系列最后一个色号后显示按钮。
-	parsed = dict(st.session_state.get("ocr_parsed") or {})
-	series_codes = [
-		item for item in parsed
-		if str(item).upper().startswith(series)
-	]
-	def _series_code_number(item: str) -> int:
-		suffix = str(item)[1:]
-		return int(suffix) if suffix.isdigit() else -1
-	last_code = max(series_codes, key=_series_code_number) if series_codes else code
-
-	if code == last_code:
-		context = _OCR_ORIGINAL_POPOVER(
-			f"➕ 为 {series} 类加色", *args, **kwargs)
-	else:
-		context = _OCR_ORIGINAL_CONTAINER(
-			key=f"ocr-hidden-add-{series}-{code}")
-	return _OcrSeriesAddContext(context, series)
-
-
-def _ocr_series_selectbox(label, options, *args, **kwargs):
-	"""加色弹窗打开期间，只保留当前大类的色号。"""
-	if _ocr_add_active_series:
-		filtered = [
-			item for item in list(options)
-			if str(item).upper().startswith(_ocr_add_active_series)
-		]
-		if filtered:
-			options = filtered
-	return _OCR_ORIGINAL_SELECTBOX(label, options, *args, **kwargs)
-
-
-# 稳定版：不再全局替换 Streamlit 原生组件。
-# OCR 大类加色入口在实际渲染循环中直接调用 _render_ocr_series_add()。
-# st.popover = _ocr_series_popover
-# st.selectbox = _ocr_series_selectbox
-
-# 修正“色板模式 / 表格模式”标签与内容容器的对应关系。
-# 原代码先接收 table 容器、再接收 palette 容器；标签改为色板优先后，
-# 这里交换返回容器，使第一个“色板模式”真正显示色板内容。
-if not hasattr(st, "_palette_default_original_tabs"):
-	st._palette_default_original_tabs = st.tabs
-
-_PALETTE_DEFAULT_ORIGINAL_TABS = st._palette_default_original_tabs
-
-
-def _palette_first_tabs(labels, *args, **kwargs):
-	tab_labels = list(labels)
-	tab_containers = _PALETTE_DEFAULT_ORIGINAL_TABS(
-		tab_labels, *args, **kwargs)
-	if tab_labels == ["🎨 色板模式", "📋 表格模式"]:
-		return tab_containers[1], tab_containers[0]
-	return tab_containers
-
-
-# 不再全局替换 st.tabs；下方按标签顺序直接接收 tab 容器。
-# st.tabs = _palette_first_tabs
-
-# OCR 快速核对：真正固定在视口右上角，并提供关闭 / 重新打开按钮。
-# 使用原始 container 包装现有快速核对内容，不需要改动后面的 OCR 渲染缩进。
-if not hasattr(st, "_quick_check_original_container"):
-	st._quick_check_original_container = _OCR_ORIGINAL_CONTAINER
-
-_QUICK_CHECK_ORIGINAL_CONTAINER = st._quick_check_original_container
-if not hasattr(st, "_quick_check_original_image"):
-	st._quick_check_original_image = st.image
-_QUICK_CHECK_ORIGINAL_IMAGE = st._quick_check_original_image
-_ocr_quick_check_active = False
-st.session_state.setdefault("ocr_quick_check_visible", True)
-
-
-def _zoomable_quick_check_image(image, *args, **kwargs):
-	"""悬浮核对窗中的图片：滚轮/双指缩放，按住拖动查看细节。"""
-	if not _ocr_quick_check_active:
-		return _QUICK_CHECK_ORIGINAL_IMAGE(image, *args, **kwargs)
-
-	try:
-		if isinstance(image, Image.Image):
-			viewer_image = image.convert("RGB")
-		elif isinstance(image, np.ndarray):
-			viewer_image = Image.fromarray(image).convert("RGB")
-		else:
-			return _QUICK_CHECK_ORIGINAL_IMAGE(image, *args, **kwargs)
-		buffer = io.BytesIO()
-		viewer_image.save(buffer, format="PNG")
-		image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
-	except Exception:
-		return _QUICK_CHECK_ORIGINAL_IMAGE(image, *args, **kwargs)
-
-	components.html(f"""
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;}}
-#viewer{{position:relative;width:100%;height:100vh;overflow:hidden;
-	border-radius:12px;background:#fff;touch-action:none;user-select:none;}}
-#viewer img{{position:absolute;left:0;top:0;max-width:none;max-height:none;
-	transform-origin:0 0;cursor:grab;-webkit-user-drag:none;}}
-#viewer.dragging img{{cursor:grabbing;}}
-</style>
-</head>
-<body>
-<div id="viewer"><img id="zoomImage" src="data:image/png;base64,{image_b64}" draggable="false"></div>
-<script>
-const viewer=document.getElementById('viewer');
-const img=document.getElementById('zoomImage');
-let scale=1,x=0,y=0,startX=0,startY=0,baseX=0,baseY=0;
-const pointers=new Map(); let pinchDistance=0,pinchScale=1;
-function clamp(v,a,b){{return Math.max(a,Math.min(b,v));}}
-function draw(){{img.style.transform=`translate(${{x}}px,${{y}}px) scale(${{scale}})`;}}
-function fit(){{
-	const w=viewer.clientWidth,h=viewer.clientHeight;
-	scale=Math.min(w/img.naturalWidth,h/img.naturalHeight);
-	x=(w-img.naturalWidth*scale)/2; y=(h-img.naturalHeight*scale)/2; draw();
-}}
-function zoomAt(px,py,next){{
-	next=clamp(next,0.15,12); const ratio=next/scale;
-	x=px-(px-x)*ratio; y=py-(py-y)*ratio; scale=next; draw();
-}}
-img.addEventListener('load',fit); window.addEventListener('resize',fit);
-viewer.addEventListener('wheel',e=>{{
-	e.preventDefault(); const r=viewer.getBoundingClientRect();
-	zoomAt(e.clientX-r.left,e.clientY-r.top,scale*(e.deltaY<0?1.14:0.88));
-}},{{passive:false}});
-viewer.addEventListener('dblclick',fit);
-viewer.addEventListener('pointerdown',e=>{{
-	viewer.setPointerCapture(e.pointerId); pointers.set(e.pointerId,{{x:e.clientX,y:e.clientY}});
-	startX=e.clientX;startY=e.clientY;baseX=x;baseY=y;viewer.classList.add('dragging');
-	if(pointers.size===2){{const p=[...pointers.values()];pinchDistance=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);pinchScale=scale;}}
-}});
-viewer.addEventListener('pointermove',e=>{{
-	if(!pointers.has(e.pointerId))return; pointers.set(e.pointerId,{{x:e.clientX,y:e.clientY}});
-	if(pointers.size===1){{x=baseX+e.clientX-startX;y=baseY+e.clientY-startY;draw();}}
-	else if(pointers.size===2){{const p=[...pointers.values()];const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
-		const r=viewer.getBoundingClientRect();const cx=(p[0].x+p[1].x)/2-r.left,cy=(p[0].y+p[1].y)/2-r.top;
-		zoomAt(cx,cy,pinchScale*d/Math.max(1,pinchDistance));}}
-}});
-function end(e){{pointers.delete(e.pointerId);viewer.classList.remove('dragging');if(pointers.size===1){{const p=[...pointers.values()][0];startX=p.x;startY=p.y;baseX=x;baseY=y;}}}}
-viewer.addEventListener('pointerup',end);viewer.addEventListener('pointercancel',end);
-</script>
-</body>
-</html>
-""", height=180, scrolling=False)
-
-
-# Streamlit 1.56+ 已弃用 components.html；不要全局替换 st.image。
-# 快速核对回退为原生 st.image，优先保证手机端和 WebSocket 会话稳定。
-# st.image = _zoomable_quick_check_image
-
-# 悬浮窗内容只保留图片；隐藏原有标题、OCR 文本和说明文字。
-st.markdown("""
-<style>
-[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] [data-testid="stCaptionContainer"],
-[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] {
-	display:none !important;
-}
-[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpander"] > details,
-[class*="st-key-ocr-quick-check-panel"] [data-testid="stExpanderDetails"] {
-	border:none !important;
-	padding:0 !important;
-	margin:0 !important;
-}
-[class*="st-key-ocr-quick-check-panel"] iframe {
-	width:100% !important;
-	height:180px !important;
-	min-height:0 !important;
-	border:0 !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-def _close_ocr_quick_check() -> None:
-	st.session_state["ocr_quick_check_visible"] = False
-
-
-def _open_ocr_quick_check() -> None:
-	st.session_state["ocr_quick_check_visible"] = True
-
-
-class _OcrQuickCheckContext:
-	def __init__(self, visible: bool):
-		self.visible = visible
-		self.outer = None
-		self.hidden = None
-
-	def __enter__(self):
-		global _ocr_quick_check_active
-		if self.visible:
-			_ocr_quick_check_active = True
-			self.outer = _QUICK_CHECK_ORIGINAL_CONTAINER(
-				key="ocr-quick-check-panel")
-			result = self.outer.__enter__()
-			st.button(
-				"✕ 关闭快速核对",
-				key="ocr_quick_check_close",
-				on_click=_close_ocr_quick_check,
-				use_container_width=True)
-			return result
-
-		# 关闭后保留一个很小的重新打开按钮；原快速核对内容放进隐藏容器。
-		self.outer = _QUICK_CHECK_ORIGINAL_CONTAINER(
-			key="ocr-quick-check-reopen")
-		result = self.outer.__enter__()
-		st.button(
-			"🔎 打开快速核对",
-			key="ocr_quick_check_open",
-			on_click=_open_ocr_quick_check,
-			use_container_width=True)
-		self.hidden = _QUICK_CHECK_ORIGINAL_CONTAINER(
-			key="ocr-quick-check-hidden")
-		self.hidden.__enter__()
-		return result
-
-	def __exit__(self, exc_type, exc_value, traceback):
-		global _ocr_quick_check_active
-		_ocr_quick_check_active = False
-		if self.hidden is not None:
-			self.hidden.__exit__(exc_type, exc_value, traceback)
-		if self.outer is not None:
-			return self.outer.__exit__(exc_type, exc_value, traceback)
-		return False
-
-
-def _floating_quick_check_container(*args, **kwargs):
-	if kwargs.get("key") == "ocr-quick-check-panel":
-		return _OcrQuickCheckContext(bool(
-			st.session_state.get("ocr_quick_check_visible", True)))
-	return _QUICK_CHECK_ORIGINAL_CONTAINER(*args, **kwargs)
-
-
-# 不再全局替换 st.container。原快速核对区域继续按普通容器渲染；
-# 避免每次 rerun 重建自定义 iframe、关闭/重开上下文而导致前端会话失步。
-# st.container = _floating_quick_check_container
-
-st.markdown("""
-<style>
-/* 始终相对浏览器视口悬浮，而不是只在原页面位置 sticky。 */
-[class*="st-key-ocr-quick-check-panel"] {
-	position: fixed !important;
-	top: 1rem !important;
-	right: 1rem !important;
-	left: auto !important;
-	display: block !important;
-	box-sizing: border-box !important;
-	width: min(520px, calc(100vw - 2rem)) !important;
-	height: auto !important;
-	max-width: calc(100vw - 2rem) !important;
-	max-height: calc(100vh - 2rem) !important;
-	resize: none !important;
-	overflow-y: auto !important;
-	background-clip: padding-box !important;
-	z-index: 1000000 !important;
-	padding: .7rem !important;
-	background: rgba(255,255,255,.97) !important;
-	border: 1px solid rgba(255,182,217,.75) !important;
-	border-radius: 16px !important;
-	box-shadow: 0 14px 42px rgba(58,58,82,.28) !important;
-	backdrop-filter: blur(12px) !important;
-}
-[class*="st-key-ocr-quick-check-panel"] img {
-	max-height: 52vh !important;
-	object-fit: contain !important;
-}
-/* 关闭后只显示一个固定在右上角的小按钮，随时可以重新打开。 */
-[class*="st-key-ocr-quick-check-reopen"] {
-	position: fixed !important;
-	top: 1rem !important;
-	right: 1rem !important;
-	width: 180px !important;
-	z-index: 1000000 !important;
-	padding: .35rem !important;
-	background: rgba(255,255,255,.96) !important;
-	border-radius: 12px !important;
-	box-shadow: 0 8px 24px rgba(58,58,82,.22) !important;
-}
-[class*="st-key-ocr-quick-check-hidden"] {
-	display: none !important;
-}
-@media (max-width: 700px) {
-	[class*="st-key-ocr-quick-check-panel"] {
-		top: .5rem !important;
-		right: .5rem !important;
-		width: calc(100vw - 1rem) !important;
-		max-width: calc(100vw - 1rem) !important;
-		max-height: calc(100vh - 1rem) !important;
-	}
-}
-</style>
-""", unsafe_allow_html=True)
-
-
 SERIES_LABELS = {
 	"A":"黄橙暖色","B":"绿色","C":"蓝青色","D":"紫蓝色",
 	"E":"粉色","F":"红色","G":"棕肤色","H":"黑白灰","M":"莫兰迪",
@@ -876,7 +543,7 @@ if page == PAGES["gen"]:
 		type=["png","jpg","jpeg","webp","bmp"])
 	col_l, col_r = st.columns(2)
 	if uploaded:
-		src = Image.open(uploaded)
+		src = _uploaded_image(uploaded)
 		with col_l:
 			st.subheader("原图预览")
 			st.image(src, width="stretch")
@@ -888,6 +555,11 @@ if page == PAGES["gen"]:
 			if only_in_stock and inv:
 				palette = {k:v for k,v in palette.items() if inv.get(k,0) > 0}
 				st.info(f"📦 仅使用有库存的颜色,共 {len(palette)} 种可用")
+			try:
+				validate_pattern(width_beads, height_beads if height_beads is not None else max(1, round(width_beads * src.height / src.width)), cell_size, palette)
+			except ValueError as exc:
+				st.warning(str(exc))
+				st.stop()
 			with st.spinner("正在生成…"):
 				pattern_img, counter = image_to_perler(src, width_beads,
 					height_beads, palette, cell_size, show_grid, show_codes)
@@ -1424,7 +1096,8 @@ elif page == PAGES["recognize"]:
 		def _get_engine():
 			try:
 				from rapidocr_onnxruntime import RapidOCR
-				return RapidOCR(), None
+				from ocr_runtime import SerializedOCR
+				return SerializedOCR(RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)), None
 			except Exception as e:
 				import traceback
 				return None, f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
@@ -1463,7 +1136,7 @@ elif page == PAGES["recognize"]:
 			key="ocr_crop_pct")
 
 		if ocr_file:
-			img = Image.open(ocr_file).convert("RGB")
+			img = _uploaded_image(ocr_file)
 			arr = np.array(img)
 			Ho,Wo = arr.shape[:2]
 			cut = Ho * (100-crop) // 100
@@ -1474,44 +1147,9 @@ elif page == PAGES["recognize"]:
 				caption=f"OCR 区域 {legend_arr.shape[1]}×{legend_arr.shape[0]}",
 				width="stretch")
 
-			# 快速核对：滚动到下方补充/修改色号时，图例仍固定在视口顶部，
-			# 不需要在原图和编辑区之间反复上下查找。
-			st.markdown(
-				"<style>"
-				"[class*='st-key-ocr-quick-check-panel']{"
-				"position:sticky;top:0.5rem;z-index:999;"
-				"background:rgba(255,255,255,.96);"
-				"border:1px solid rgba(116,92,255,.25);"
-				"border-radius:16px;padding:8px 10px;"
-				"box-shadow:0 8px 24px rgba(50,45,90,.16);"
-				"backdrop-filter:blur(10px);"
-				"}"
-				"[class*='st-key-ocr-quick-check-panel'] img{"
-				"max-height:300px;object-fit:contain;"
-				"}"
-				"</style>",
-				unsafe_allow_html=True,
-			)
 			with st.container(key="ocr-quick-check-panel"):
-				with st.expander(
-					"🔎 快速核对 · 补色时保持在顶部",
-					expanded=True,
-				):
-					st.image(
-						Image.fromarray(legend_arr),
-						caption="当前 OCR 图例区域（可收起）",
-						width="stretch",
-					)
-					raw_lines = st.session_state.get("ocr_raw_lines") or []
-					if raw_lines:
-						preview_text = " ｜ ".join(
-							str(line) for line in raw_lines[:12]
-						)
-						st.caption(f"OCR 文本：{preview_text}")
-					st.caption(
-						"向下滚动修改颗数或按大类补色时，本面板会停留在顶部；"
-						"核对完成后点标题即可收起。"
-					)
+				with st.expander("🔎 快速核对 · 点击展开 / 收起", expanded=True):
+					render_quick_check(Image.fromarray(legend_arr))
 
 			if st.button("🔬 开始 OCR 识别", type="primary",
 			             width="stretch", key="ocr_run"):
@@ -1520,7 +1158,11 @@ elif page == PAGES["recognize"]:
 					st.error(f"❌ OCR 引擎加载失败:\n```\n{err}\n```")
 				else:
 					with st.spinner("OCR 中…"):
-						result, _ = engine(legend_arr)
+						try:
+							result, _ = engine(legend_arr)
+						except Exception as exc:
+							st.error(f"OCR 未完成：{exc}")
+							st.stop()
 					if not result:
 						st.warning("OCR 没读到任何文字。")
 					else:
@@ -2107,8 +1749,8 @@ elif page == PAGES["recognize"]:
 		st.caption("⚠️ 如有坐标轴/图例/水印边框,请用裁剪滑块去掉,只留纯色块网格区域,横/纵格数要与真实格子数一致。")
 
 		if rec_file:
-			rec_img = Image.open(rec_file).convert("RGB")
-			arr_full = np.array(rec_img, dtype=np.int32)
+			rec_img = _uploaded_image(rec_file)
+			arr_full = np.array(rec_img, dtype=np.uint8)
 			H, W = arr_full.shape[:2]
 			ax0 = W * crop_left // 100
 			ax1 = W - W * crop_right // 100

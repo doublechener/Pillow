@@ -4,15 +4,19 @@
 这样 Postgres RLS 才能识别 auth.uid()。
 """
 import streamlit as st
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 
 
-@st.cache_resource
 def _base_client() -> Client:
-	return create_client(
-		st.secrets["supabase"]["url"],
-		st.secrets["supabase"]["anon_key"],
-	)
+	# Auth and request headers are mutable: never share this across users.
+	if "sb_client" not in st.session_state:
+		st.session_state["sb_client"] = create_client(
+			st.secrets["supabase"]["url"],
+			st.secrets["supabase"]["anon_key"],
+			options=ClientOptions(auto_refresh_token=False,
+				postgrest_client_timeout=15, storage_client_timeout=20),
+		)
+	return st.session_state["sb_client"]
 
 
 def get_client() -> Client:
@@ -24,14 +28,14 @@ def get_client() -> Client:
 	client = _base_client()
 	session = st.session_state.get("sb_session")
 	if session:
-		client.postgrest.auth(session["access_token"])
-		# 让 storage 也带上 JWT(supabase-py 2.x)
-		try:
-			client.storage._client.headers["Authorization"] = (
-				f"Bearer {session['access_token']}"
-			)
-		except Exception:
-			pass
+		# Public auth API refreshes expired tokens and updates PostgREST/Storage.
+		live = client.auth.get_session()
+		if live is None:
+			live = client.auth.set_session(
+				session["access_token"], session["refresh_token"]).session
+		if live is None:
+			raise RuntimeError("登录已失效，请重新登录。")
+		session.update(access_token=live.access_token, refresh_token=live.refresh_token)
 	return client
 
 

@@ -366,6 +366,27 @@ h1, h2, h3 {
 footer { visibility: hidden; }
 #MainMenu { visibility: hidden; }
 html { scroll-behavior: smooth; }
+/* Keep the reference near edits without covering the viewport or dialogs. */
+.st-key-ocr-quick-check-panel {
+	position: sticky; top: 3.75rem; z-index: 50;
+	background: #fff; border: 1px solid #efc6dc;
+	border-radius: 12px; padding: 6px;
+}
+.st-key-ocr-quick-check-panel iframe { width: 100%; border: 0; }
+@media (max-width: 700px) {
+	[data-testid="stMainBlockContainer"] { padding: 1rem .65rem 3rem; }
+	[data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .6rem; }
+	[data-testid="stColumn"] { min-width: min(100%, 280px); flex: 1 1 280px; }
+	[data-testid="stRadio"] > div { flex-wrap: wrap; gap: .3rem; }
+	[data-baseweb="tab-list"] { overflow-x: auto; }
+	[data-baseweb="tab"] { white-space: nowrap; }
+	input, textarea, select { font-size: 16px !important; }
+	button { min-height: 44px; }
+	.hero-banner { padding: 12px; gap: 10px; }
+	.hero-title { font-size: 26px; }
+	.hero-sub { overflow-wrap: anywhere; }
+	.st-key-ocr-quick-check-panel { top: 3.5rem; }
+}
 </style>
 """
 
