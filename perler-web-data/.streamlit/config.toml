@@ -1,3 +1,11 @@
 [server]
 maxUploadSize = 20
 maxMessageSize = 40
+
+[theme]
+base = "light"
+primaryColor = "#475c77"
+backgroundColor = "#f6f7f9"
+secondaryBackgroundColor = "#eef1f5"
+textColor = "#202938"
+font = "sans serif"

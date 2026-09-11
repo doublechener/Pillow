@@ -19,8 +19,10 @@ html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:transparen
 	border-radius:12px;background:#fff;touch-action:none;user-select:none;}}
 #viewer img{{position:absolute;left:0;top:0;max-width:none;max-height:none;
 	transform-origin:0 0;cursor:grab;-webkit-user-drag:none;}}
-nav{{height:48px;display:flex;align-items:center;gap:8px;font:12px sans-serif;}}
-button{{min-width:44px;min-height:44px;border:1px solid #ccc;border-radius:8px;background:white;cursor:pointer;}}
+nav{{height:48px;display:flex;align-items:center;gap:8px;font:12px -apple-system,"Segoe UI",sans-serif;color:#687487;}}
+button{{min-width:40px;min-height:40px;border:1px solid #e3e7ed;border-radius:8px;background:#f6f7f9;color:#202938;cursor:pointer;}}
+button:hover{{background:#edf1f6;border-color:#8796aa;}}
+button:focus-visible{{outline:2px solid #475c77;outline-offset:2px;}}
 #viewer.dragging img{{cursor:grabbing;}}
 </style>
 </head>

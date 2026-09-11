@@ -61,16 +61,16 @@ except Exception:
 # ============================================================
 # 顶栏
 # ============================================================
-top_l, top_r = st.columns([5, 1])
-with top_l:
-	render_hero(APP_NAME,
-	            f"👤 {session['email']} · {APP_TAGLINE} ✨",
-	            mascot_size=72)
-with top_r:
-	st.write("")
-	if st.button("🚪 登出", width="stretch"):
-		auth.sign_out()
-		st.rerun()
+with st.container(key="app-header"):
+	top_l, top_r = st.columns([5, 1])
+	with top_l:
+		render_hero(APP_NAME,
+		            f"{session['email']} · {APP_TAGLINE}",
+		            mascot_size=72)
+	with top_r:
+		if st.button("退出", width="stretch"):
+			auth.sign_out()
+			st.rerun()
 
 
 # ============================================================
@@ -524,8 +524,8 @@ with st.sidebar:
 		f"<div style='display:flex;align-items:center;gap:10px;"
 		f"margin-bottom:6px;'>{mascot_html(28)}"
 		f"<span style='font-weight:800;font-size:18px;"
-		f"background:linear-gradient(90deg,#FF6B9D,#6BB6FF);"
-		f"-webkit-background-clip:text;-webkit-text-fill-color:transparent;'>"
+		f"color:#202938;"
+		f"'>"
 		f"{APP_NAME}</span></div>",
 		unsafe_allow_html=True)
 	st.divider()
@@ -558,6 +558,8 @@ with st.sidebar:
 
 # ---------- 生成图纸 ----------
 if page == PAGES["gen"]:
+	st.subheader("从一张图片，开始创作")
+	st.caption("上传图片，调整豆数与配色，生成属于你的拼豆图纸。")
 	uploaded = st.file_uploader("上传图片",
 		type=["png","jpg","jpeg","webp","bmp"])
 	col_l, col_r = st.columns(2)
@@ -657,6 +659,8 @@ if page == PAGES["gen"]:
 
 # ---------- 编辑库存 ----------
 elif page == PAGES["inv"]:
+	st.subheader("让每一颗豆，都有数")
+	st.caption("查看用量、管理余量，及时补齐下一幅作品需要的颜色。")
 	inv = db.load_inventory()
 	used_totals = db.load_used_totals()
 	last_ts = db.last_updated()
@@ -1028,9 +1032,9 @@ elif page == PAGES["inv"]:
 			series_total = sum(inv[c] for c in series_codes)
 			st.markdown(
 				f"<div style='margin:18px 0 10px;padding:10px 16px;"
-				f"background:linear-gradient(90deg,rgba(255,182,217,.18),"
+				f"background:linear-gradient(90deg,rgba(226,232,240,.6),"
 				f"rgba(168,218,255,.18));border-radius:12px;"
-				f"border:1px solid rgba(255,182,217,.3);'>"
+				f"border:1px solid rgba(148,163,184,.25);'>"
 				f"<b style='font-size:15px;'>{series} · "
 				f"{SERIES_LABELS.get(series, '')}</b>"
 				f"<span style='font-size:12px;color:#7A7A9A;margin-left:10px;'>"
@@ -1124,9 +1128,9 @@ elif page == PAGES["recognize"]:
 		st.markdown(
 			"<div style='display:flex;gap:10px;align-items:center;"
 			"margin:6px 0 14px;padding:10px 14px;"
-			"background:linear-gradient(90deg,rgba(255,233,168,.25),"
-			"rgba(255,182,217,.25));border-radius:12px;"
-			"border:1px solid rgba(255,182,217,.3);'>"
+			"background:linear-gradient(90deg,rgba(226,232,240,.6),"
+			"rgba(241,245,249,.6));border-radius:12px;"
+			"border:1px solid rgba(148,163,184,.25);'>"
 			"<span style='font-size:13px;color:#3A3A52;'>"
 			"不想上传图片？可以直接建个空白清单，"
 			"手动选色号 + 输颗数 ➜ 保存 ➜ 一键扣库存。"
@@ -1620,9 +1624,9 @@ elif page == PAGES["recognize"]:
 						series_total = sum(n for _, n in series_codes)
 						st.markdown(
 							f"<div style='margin:18px 0 10px;padding:10px 16px;"
-							f"background:linear-gradient(90deg,rgba(255,182,217,.18),"
+							f"background:linear-gradient(90deg,rgba(226,232,240,.6),"
 							f"rgba(168,218,255,.18));border-radius:12px;"
-							f"border:1px solid rgba(255,182,217,.3);'>"
+							f"border:1px solid rgba(148,163,184,.25);'>"
 							f"<b style='font-size:15px;'>{s} · "
 							f"{SERIES_LABELS.get(s, '')}</b>"
 							f"<span style='font-size:12px;color:#7A7A9A;"

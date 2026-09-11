@@ -59,12 +59,14 @@ def require_login() -> dict | None:
 
 	inject_global_css()
 	render_hero("豆映工坊",
-	            "像素映豆 · 库存随手 · 灵感成图 · 让创作随你心动 ✨",
+	            "把灵感变成图纸，让创作井然有序。",
 	            mascot_size=80)
 
 	# 居中容器,避免登录表单铺满整屏
-	_, mid, _ = st.columns([1, 2, 1])
+	mid = st.container(key="login-panel")
 	with mid:
+		st.subheader("欢迎回到工坊")
+		st.caption("登录后继续创作，图纸与库存随时同步。")
 		tab_login, tab_signup = st.tabs(["🔑 登录", "📝 注册"])
 
 		with tab_login:
